@@ -276,6 +276,22 @@ mod tests {
         }
     }
 
+    fn passing_verify(message: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("echo {message}")
+        } else {
+            format!("printf {message}")
+        }
+    }
+
+    fn failing_verify(message: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("echo {message} && exit /B 7")
+        } else {
+            format!("printf {message}; exit 7")
+        }
+    }
+
     #[test]
     fn stops_when_validation_passes() {
         assert!(should_stop(1, 3, true, &["x".to_string()]));
@@ -295,7 +311,7 @@ mod tests {
     fn dry_run_writes_record() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("README.md"), "hello").unwrap();
-        let config = test_config("printf ok", 3);
+        let config = test_config(&passing_verify("ok"), 3);
 
         let summary = run_loop_with_executor(
             &config,
@@ -313,7 +329,7 @@ mod tests {
     fn failed_verification_writes_remaining_delta() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("README.md"), "hello").unwrap();
-        let config = test_config("printf failure-details; exit 7", 1);
+        let config = test_config(&failing_verify("failure-details"), 1);
 
         let summary = run_loop_with_executor(
             &config,
@@ -337,7 +353,7 @@ mod tests {
     fn failed_verification_runs_until_max_iterations() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("README.md"), "hello").unwrap();
-        let config = test_config("printf still-bad; exit 7", 2);
+        let config = test_config(&failing_verify("still-bad"), 2);
 
         let summary = run_loop_with_executor(
             &config,
@@ -364,7 +380,7 @@ mod tests {
     fn second_iteration_receives_previous_delta() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("README.md"), "hello").unwrap();
-        let config = test_config("printf first-failure; exit 7", 2);
+        let config = test_config(&failing_verify("first-failure"), 2);
         let seen_deltas = Arc::new(Mutex::new(Vec::new()));
         let executor = RecordingPhaseExecutor {
             seen_deltas: Arc::clone(&seen_deltas),

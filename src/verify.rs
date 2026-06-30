@@ -37,10 +37,26 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn passing_command(message: &str) -> String {
+        if cfg!(target_os = "windows") {
+            format!("echo {message}")
+        } else {
+            format!("printf {message}")
+        }
+    }
+
+    fn failing_command(code: i32) -> String {
+        if cfg!(target_os = "windows") {
+            format!("exit /B {code}")
+        } else {
+            format!("exit {code}")
+        }
+    }
+
     #[test]
     fn verify_passes_for_zero_exit() {
         let dir = tempdir().unwrap();
-        let result = run_verify("printf 123", dir.path()).unwrap();
+        let result = run_verify(&passing_command("123"), dir.path()).unwrap();
         assert!(result.passed);
         assert_eq!(result.returncode, 0);
         assert!(result.stdout.contains("123"));
@@ -49,7 +65,7 @@ mod tests {
     #[test]
     fn verify_fails_for_nonzero_exit() {
         let dir = tempdir().unwrap();
-        let result = run_verify("exit 7", dir.path()).unwrap();
+        let result = run_verify(&failing_command(7), dir.path()).unwrap();
         assert!(!result.passed);
         assert_eq!(result.returncode, 7);
     }
