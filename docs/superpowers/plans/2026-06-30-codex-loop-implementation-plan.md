@@ -2,196 +2,216 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a minimal local CLI that runs auditable iterative repair loops with Codex.
+**Goal:** 用 Rust 构建一个本地 CLI，负责运行可审计的 Codex 迭代修复闭环。
 
-**Architecture:** A Python runner owns state, artifact copies, validation commands, stop conditions, and audit records. Codex is invoked only through `codex exec` with JSON schema outputs for review and repair phases. Each iteration writes a durable record so a maintainer can inspect what was found, changed, verified, and left unresolved.
+**Architecture:** Rust CLI 只负责外层确定性编排：读取配置、准备候选工作区、调用 `codex exec`、执行机械验证、写入审计记录和判断停止条件。Codex 只作为 review/repair 引擎，通过 `--output-schema` 返回结构化 JSON；源文件默认不被直接修改，修复先落在 `runs/<run-id>/iteration_N/workspace/` 中。
 
-**Tech Stack:** Python 3.11+, `argparse`, `subprocess`, `json`, `pathlib`, `pytest`, Codex CLI.
+**Tech Stack:** Rust 1.85+、edition 2024、`clap`、`serde`、`serde_json`、`anyhow`、`tempfile`、`assert_cmd`、Codex CLI。
 
 ## Global Constraints
 
-- Default sandbox must be `workspace-write`.
-- Default approval policy must be `never` only for the nested `codex exec` calls managed by this runner.
-- Do not require a notebook runtime; the first implementation must work on plain text and code files.
-- Do not rely on LLM judgment as the only pass/fail signal; every recipe must define a mechanical `verify` command.
-- Write run artifacts under `runs/<run-id>/` and keep `runs/` ignored by git.
-- Keep implementation small: no daemon, no UI, no database in the first version.
-- Preserve user files by editing a copied artifact inside the run directory first; applying the patch back to the source is a later explicit step.
+- 默认 sandbox 必须是 `workspace-write`。
+- 默认 approval policy 只允许嵌套 `codex exec` 使用 `never`。
+- 第一版不依赖 Notebook runtime，必须支持普通文本和代码文件。
+- 不允许只靠 LLM judge 判定成功；每个 recipe 必须配置机械 `verify` 命令。
+- 所有运行产物写到 `runs/<run-id>/`，并保持 `runs/` 不进入 git。
+- 第一版保持小闭环：不做 daemon、不做 UI、不做数据库、不做远程调度。
+- 默认只修改候选工作区；将 patch 应用回源文件必须作为后续显式能力。
 
 ---
 
+## 技术取舍
+
+选择 Rust 的理由：
+
+- 单二进制分发能力强，适合作为长期 CLI 工具。
+- 类型系统适合约束 config、record、schema、状态机和错误路径。
+- 进程编排、文件系统操作、JSON 序列化都足够成熟。
+- 后续如果要做插件协议、长期版本化、CI 分发，Rust 的边界更清晰。
+
+代价：
+
+- MVP 编写速度慢于 Go。
+- 需要更早设计模块边界和错误类型。
+- 测试里要避免真实调用 `codex exec`，需要把命令构造和执行层拆开。
+
 ## File Structure
 
-- Create `pyproject.toml`: package metadata, Python version floor, pytest config.
-- Create `src/codex_loop/__init__.py`: package version.
-- Create `src/codex_loop/config.py`: typed config loading and validation.
-- Create `src/codex_loop/schemas.py`: JSON schema builders for Codex structured outputs.
-- Create `src/codex_loop/codex_exec.py`: wrapper around `codex exec`.
-- Create `src/codex_loop/verify.py`: mechanical verification command runner.
-- Create `src/codex_loop/records.py`: run directory and `record.json` persistence.
-- Create `src/codex_loop/runner.py`: iteration orchestration and stop conditions.
-- Create `src/codex_loop/cli.py`: `codex-loop run --config loop.json` entrypoint.
-- Create `tests/`: focused pytest coverage for config, schemas, exec wrapper command construction, verification, and runner stop logic.
-- Create `examples/plaintext-loop.json`: minimal config example.
+- Create `Cargo.toml`: crate metadata、依赖、dev-dependencies。
+- Create `src/main.rs`: CLI 入口。
+- Create `src/lib.rs`: 模块导出。
+- Create `src/config.rs`: `LoopConfig` 加载、默认值、校验。
+- Create `src/schema.rs`: review/repair JSON schema。
+- Create `src/codex_exec.rs`: `codex exec` 命令构造与 JSON 输出读取。
+- Create `src/verify.rs`: 机械验证命令执行。
+- Create `src/record.rs`: `record.json` 与 run artifact 写入。
+- Create `src/workspace.rs`: run workspace 创建、artifact 复制、diff 生成入口。
+- Create `src/runner.rs`: 单轮和多轮 orchestration、停止条件。
+- Create `examples/plaintext-loop.json`: 最小配置示例。
+- Modify `README.md`: Rust 版本定位和本地命令。
 
-### Task 1: Project Skeleton And Config Loader
+### Task 1: Rust Project Skeleton And Config
 
 **Files:**
-- Create: `pyproject.toml`
-- Create: `src/codex_loop/__init__.py`
-- Create: `src/codex_loop/config.py`
-- Create: `tests/test_config.py`
+- Create: `Cargo.toml`
+- Create: `src/lib.rs`
+- Create: `src/config.rs`
 - Create: `examples/plaintext-loop.json`
 
 **Interfaces:**
-- Produces: `LoopConfig.from_file(path: Path) -> LoopConfig`
-- Produces: `LoopConfig.validate() -> None`
+- Produces: `LoopConfig::from_path(path: impl AsRef<Path>) -> anyhow::Result<LoopConfig>`
+- Produces: `LoopConfig::validate(&self) -> anyhow::Result<()>`
 - Consumes: no earlier project code
 
 - [ ] **Step 1: Write the failing config tests**
 
-```python
-from pathlib import Path
+Create `src/config.rs` with tests first:
 
-import pytest
+```rust
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use std::{fs, path::Path};
 
-from codex_loop.config import LoopConfig
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoopConfig {
+    pub artifact: String,
+    pub goal: String,
+    pub verify: String,
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: usize,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_sandbox")]
+    pub sandbox: String,
+    #[serde(default = "default_approval_policy")]
+    pub approval_policy: String,
+}
 
+fn default_max_iterations() -> usize { 3 }
+fn default_model() -> String { "gpt-5.4-mini".to_string() }
+fn default_sandbox() -> String { "workspace-write".to_string() }
+fn default_approval_policy() -> String { "never".to_string() }
 
-def test_loads_minimal_loop_config(tmp_path: Path):
-    config_path = tmp_path / "loop.json"
-    config_path.write_text(
-        """
-        {
-          "artifact": "README.md",
-          "goal": "remove stale setup guidance",
-          "verify": "python -c 'print(0)'",
-          "max_iterations": 3
+impl LoopConfig {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
+        let text = fs::read_to_string(path.as_ref())
+            .with_context(|| format!("failed to read config {}", path.as_ref().display()))?;
+        let config: Self = serde_json::from_str(&text).context("failed to parse loop config JSON")?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.artifact.trim().is_empty() {
+            bail!("artifact is required");
         }
-        """,
-        encoding="utf-8",
-    )
-
-    config = LoopConfig.from_file(config_path)
-
-    assert config.artifact == Path("README.md")
-    assert config.goal == "remove stale setup guidance"
-    assert config.verify == "python -c 'print(0)'"
-    assert config.max_iterations == 3
-    assert config.sandbox == "workspace-write"
-    assert config.approval_policy == "never"
-
-
-def test_rejects_missing_verify(tmp_path: Path):
-    config_path = tmp_path / "loop.json"
-    config_path.write_text(
-        """
-        {
-          "artifact": "README.md",
-          "goal": "remove stale setup guidance"
+        if self.goal.trim().is_empty() {
+            bail!("goal is required");
         }
-        """,
-        encoding="utf-8",
-    )
+        if self.verify.trim().is_empty() {
+            bail!("verify is required");
+        }
+        if self.max_iterations == 0 {
+            bail!("max_iterations must be at least 1");
+        }
+        if !["read-only", "workspace-write", "danger-full-access"].contains(&self.sandbox.as_str()) {
+            bail!("unsupported sandbox: {}", self.sandbox);
+        }
+        if !["untrusted", "on-request", "never"].contains(&self.approval_policy.as_str()) {
+            bail!("unsupported approval_policy: {}", self.approval_policy);
+        }
+        Ok(())
+    }
+}
 
-    with pytest.raises(ValueError, match="verify"):
-        LoopConfig.from_file(config_path)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn loads_minimal_loop_config_with_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("loop.json");
+        fs::write(
+            &path,
+            r#"{
+              "artifact": "README.md",
+              "goal": "remove stale setup guidance",
+              "verify": "cargo test"
+            }"#,
+        )
+        .unwrap();
+
+        let config = LoopConfig::from_path(&path).unwrap();
+
+        assert_eq!(config.artifact, "README.md");
+        assert_eq!(config.goal, "remove stale setup guidance");
+        assert_eq!(config.verify, "cargo test");
+        assert_eq!(config.max_iterations, 3);
+        assert_eq!(config.sandbox, "workspace-write");
+        assert_eq!(config.approval_policy, "never");
+    }
+
+    #[test]
+    fn rejects_missing_verify() {
+        let config = LoopConfig {
+            artifact: "README.md".to_string(),
+            goal: "repair docs".to_string(),
+            verify: "".to_string(),
+            max_iterations: 3,
+            model: "gpt-5.4-mini".to_string(),
+            sandbox: "workspace-write".to_string(),
+            approval_policy: "never".to_string(),
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("verify"));
+    }
+}
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `python -m pytest tests/test_config.py -q`
+Run: `cargo test config --quiet`
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'codex_loop'`.
+Expected: FAIL because `Cargo.toml` and module wiring do not exist.
 
-- [ ] **Step 3: Add package metadata**
+- [ ] **Step 3: Add Cargo project metadata**
 
-Create `pyproject.toml`:
+Create `Cargo.toml`:
 
 ```toml
-[project]
+[package]
 name = "codex-loop"
 version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
 description = "Auditable iterative repair loops driven by Codex CLI"
-requires-python = ">=3.11"
-dependencies = []
+license = "MIT"
 
-[project.scripts]
-codex-loop = "codex_loop.cli:main"
+[[bin]]
+name = "codex-loop"
+path = "src/main.rs"
 
-[build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]
+[dev-dependencies]
+assert_cmd = "2.0"
+tempfile = "3.10"
 ```
 
-- [ ] **Step 4: Implement config loader**
+Create `src/lib.rs`:
 
-Create `src/codex_loop/__init__.py`:
-
-```python
-__version__ = "0.1.0"
+```rust
+pub mod config;
 ```
 
-Create `src/codex_loop/config.py`:
-
-```python
-from __future__ import annotations
-
-import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-
-@dataclass(frozen=True)
-class LoopConfig:
-    artifact: Path
-    goal: str
-    verify: str
-    max_iterations: int = 3
-    model: str = "gpt-5.4-mini"
-    sandbox: str = "workspace-write"
-    approval_policy: str = "never"
-
-    @classmethod
-    def from_file(cls, path: Path) -> "LoopConfig":
-        data = json.loads(path.read_text(encoding="utf-8"))
-        config = cls.from_dict(data)
-        config.validate()
-        return config
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LoopConfig":
-        return cls(
-            artifact=Path(str(data.get("artifact", ""))),
-            goal=str(data.get("goal", "")),
-            verify=str(data.get("verify", "")),
-            max_iterations=int(data.get("max_iterations", 3)),
-            model=str(data.get("model", "gpt-5.4-mini")),
-            sandbox=str(data.get("sandbox", "workspace-write")),
-            approval_policy=str(data.get("approval_policy", "never")),
-        )
-
-    def validate(self) -> None:
-        if not str(self.artifact):
-            raise ValueError("artifact is required")
-        if not self.goal.strip():
-            raise ValueError("goal is required")
-        if not self.verify.strip():
-            raise ValueError("verify is required")
-        if self.max_iterations < 1:
-            raise ValueError("max_iterations must be at least 1")
-        if self.sandbox not in {"read-only", "workspace-write", "danger-full-access"}:
-            raise ValueError(f"unsupported sandbox: {self.sandbox}")
-        if self.approval_policy not in {"untrusted", "on-request", "never"}:
-            raise ValueError(f"unsupported approval_policy: {self.approval_policy}")
-```
-
-- [ ] **Step 5: Add example config**
+- [ ] **Step 4: Add example config**
 
 Create `examples/plaintext-loop.json`:
 
@@ -199,7 +219,7 @@ Create `examples/plaintext-loop.json`:
 {
   "artifact": "README.md",
   "goal": "Make the README clearer and remove stale setup guidance.",
-  "verify": "python -m pytest -q",
+  "verify": "cargo test --quiet",
   "max_iterations": 3,
   "model": "gpt-5.4-mini",
   "sandbox": "workspace-write",
@@ -207,605 +227,772 @@ Create `examples/plaintext-loop.json`:
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 5: Run tests**
 
-Run: `python -m pytest tests/test_config.py -q`
+Run: `cargo test config --quiet`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add pyproject.toml src/codex_loop/__init__.py src/codex_loop/config.py tests/test_config.py examples/plaintext-loop.json
-git commit -m "feat: add loop config loader"
+git add Cargo.toml src/lib.rs src/config.rs examples/plaintext-loop.json
+git commit -m "feat: add rust loop config"
 ```
 
-### Task 2: Structured Schemas And Codex Exec Adapter
+### Task 2: JSON Schemas And Codex Exec Adapter
 
 **Files:**
-- Create: `src/codex_loop/schemas.py`
-- Create: `src/codex_loop/codex_exec.py`
-- Create: `tests/test_schemas.py`
-- Create: `tests/test_codex_exec.py`
+- Create: `src/schema.rs`
+- Create: `src/codex_exec.rs`
+- Modify: `src/lib.rs`
 
 **Interfaces:**
 - Consumes: `LoopConfig`
-- Produces: `review_schema() -> dict`
-- Produces: `repair_schema() -> dict`
-- Produces: `run_codex_json(prompt: str, schema: dict, run_dir: Path, config: LoopConfig) -> dict`
+- Produces: `review_schema() -> serde_json::Value`
+- Produces: `repair_schema() -> serde_json::Value`
+- Produces: `build_codex_command(schema_file: &Path, answer_file: &Path, config: &LoopConfig) -> std::process::Command`
+- Produces: `run_codex_json(prompt: &str, schema: &Value, run_dir: &Path, config: &LoopConfig) -> anyhow::Result<Value>`
 
-- [ ] **Step 1: Write schema tests**
+- [ ] **Step 1: Write schema and command construction tests**
 
-```python
-from codex_loop.schemas import repair_schema, review_schema
+Create `src/schema.rs`:
 
+```rust
+use serde_json::{json, Value};
 
-def test_review_schema_requires_findings():
-    schema = review_schema()
-
-    assert schema["type"] == "object"
-    assert schema["required"] == ["findings"]
-    assert schema["additionalProperties"] is False
-
-
-def test_repair_schema_requires_updated_artifact_path():
-    schema = repair_schema()
-
-    assert "updated_artifact_path" in schema["required"]
-    assert schema["properties"]["changes_made"]["type"] == "array"
-```
-
-- [ ] **Step 2: Write Codex adapter command test**
-
-```python
-from pathlib import Path
-
-from codex_loop.codex_exec import build_codex_command
-from codex_loop.config import LoopConfig
-
-
-def test_build_codex_command_uses_schema_and_output_file(tmp_path: Path):
-    config = LoopConfig(
-        artifact=Path("README.md"),
-        goal="repair docs",
-        verify="python -m pytest -q",
-    )
-
-    command = build_codex_command(tmp_path / "schema.json", tmp_path / "answer.json", config)
-
-    assert command[:2] == ["codex", "exec"]
-    assert "--sandbox" in command
-    assert "workspace-write" in command
-    assert "--ask-for-approval" in command
-    assert "never" in command
-    assert "--output-schema" in command
-    assert "--output-last-message" in command
-    assert command[-1] == "-"
-```
-
-- [ ] **Step 3: Run tests to verify they fail**
-
-Run: `python -m pytest tests/test_schemas.py tests/test_codex_exec.py -q`
-
-Expected: FAIL because `schemas.py` and `codex_exec.py` do not exist.
-
-- [ ] **Step 4: Implement schema helpers**
-
-Create `src/codex_loop/schemas.py`:
-
-```python
-from __future__ import annotations
-
-from typing import Any
-
-
-def object_schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
-    return {
+fn object_schema(properties: Value, required: Vec<&str>) -> Value {
+    json!({
         "type": "object",
         "properties": properties,
-        "required": required or list(properties),
-        "additionalProperties": False,
-    }
+        "required": required,
+        "additionalProperties": false
+    })
+}
 
-
-def string_array() -> dict[str, Any]:
-    return {"type": "array", "items": {"type": "string"}}
-
-
-def review_schema() -> dict[str, Any]:
-    finding = object_schema(
-        {
+pub fn review_schema() -> Value {
+    let finding = object_schema(
+        json!({
             "artifact": {"type": "string"},
             "issue_type": {"type": "string"},
             "severity": {"type": "string"},
             "description": {"type": "string"},
-            "suggested_fix_direction": {"type": "string"},
-        }
-    )
-    return object_schema({"findings": {"type": "array", "items": finding}})
+            "suggested_fix_direction": {"type": "string"}
+        }),
+        vec!["artifact", "issue_type", "severity", "description", "suggested_fix_direction"],
+    );
+    object_schema(json!({"findings": {"type": "array", "items": finding}}), vec!["findings"])
+}
 
-
-def repair_schema() -> dict[str, Any]:
-    return object_schema(
-        {
+pub fn repair_schema() -> Value {
+    object_schema(
+        json!({
             "artifact": {"type": "string"},
             "iteration": {"type": "integer"},
-            "changes_made": string_array(),
-            "unresolved_items": string_array(),
-            "updated_artifact_path": {"type": "string"},
-        }
+            "changes_made": {"type": "array", "items": {"type": "string"}},
+            "unresolved_items": {"type": "array", "items": {"type": "string"}},
+            "updated_artifact_path": {"type": "string"}
+        }),
+        vec!["artifact", "iteration", "changes_made", "unresolved_items", "updated_artifact_path"],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_schema_requires_findings() {
+        let schema = review_schema();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["required"], json!(["findings"]));
+        assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn repair_schema_requires_updated_artifact_path() {
+        let schema = repair_schema();
+        assert!(schema["required"].as_array().unwrap().contains(&json!("updated_artifact_path")));
+        assert_eq!(schema["properties"]["changes_made"]["type"], "array");
+    }
+}
 ```
 
-- [ ] **Step 5: Implement Codex exec adapter**
+Create `src/codex_exec.rs` with command test:
 
-Create `src/codex_loop/codex_exec.py`:
+```rust
+use crate::config::LoopConfig;
+use anyhow::{Context, Result};
+use serde_json::Value;
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
-```python
-from __future__ import annotations
-
-import json
-import subprocess
-from pathlib import Path
-from typing import Any
-
-from codex_loop.config import LoopConfig
-
-
-def build_codex_command(schema_file: Path, answer_file: Path, config: LoopConfig) -> list[str]:
-    return [
-        "codex",
-        "exec",
-        "--model",
-        config.model,
-        "--sandbox",
-        config.sandbox,
-        "--ask-for-approval",
-        config.approval_policy,
-        "--output-schema",
-        str(schema_file),
-        "--output-last-message",
-        str(answer_file),
-        "-",
+pub fn codex_args(schema_file: &Path, answer_file: &Path, config: &LoopConfig) -> Vec<String> {
+    vec![
+        "exec".to_string(),
+        "--model".to_string(),
+        config.model.clone(),
+        "--sandbox".to_string(),
+        config.sandbox.clone(),
+        "--ask-for-approval".to_string(),
+        config.approval_policy.clone(),
+        "--output-schema".to_string(),
+        schema_file.display().to_string(),
+        "--output-last-message".to_string(),
+        answer_file.display().to_string(),
+        "-".to_string(),
     ]
+}
 
+pub fn build_codex_command(schema_file: &Path, answer_file: &Path, config: &LoopConfig) -> Command {
+    let mut command = Command::new("codex");
+    command.args(codex_args(schema_file, answer_file, config));
+    command
+}
 
-def run_codex_json(prompt: str, schema: dict[str, Any], run_dir: Path, config: LoopConfig) -> dict[str, Any]:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    prompt_file = run_dir / "prompt.txt"
-    schema_file = run_dir / "schema.json"
-    answer_file = run_dir / "answer.json"
+pub fn run_codex_json(prompt: &str, schema: &Value, run_dir: &Path, config: &LoopConfig) -> Result<Value> {
+    fs::create_dir_all(run_dir)?;
+    let prompt_file = run_dir.join("prompt.txt");
+    let schema_file = run_dir.join("schema.json");
+    let answer_file = run_dir.join("answer.json");
 
-    prompt_file.write_text(prompt, encoding="utf-8")
-    schema_file.write_text(json.dumps(schema, indent=2), encoding="utf-8")
+    fs::write(&prompt_file, prompt)?;
+    fs::write(&schema_file, serde_json::to_string_pretty(schema)?)?;
 
-    result = subprocess.run(
-        build_codex_command(schema_file, answer_file, config),
-        input=prompt,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    let mut child = build_codex_command(&schema_file, &answer_file, config)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn codex exec")?;
 
-    (run_dir / "stdout.txt").write_text(result.stdout, encoding="utf-8")
-    (run_dir / "stderr.txt").write_text(result.stderr, encoding="utf-8")
+    child.stdin.as_mut().unwrap().write_all(prompt.as_bytes())?;
+    let output = child.wait_with_output()?;
+    fs::write(run_dir.join("stdout.txt"), &output.stdout)?;
+    fs::write(run_dir.join("stderr.txt"), &output.stderr)?;
 
-    if result.returncode != 0:
-        raise RuntimeError(f"codex exec failed with exit code {result.returncode}: {run_dir / 'stderr.txt'}")
+    if !output.status.success() {
+        anyhow::bail!("codex exec failed with status {}", output.status);
+    }
 
-    return json.loads(answer_file.read_text(encoding="utf-8"))
+    let answer = fs::read_to_string(&answer_file)
+        .with_context(|| format!("missing codex answer {}", answer_file.display()))?;
+    Ok(serde_json::from_str(&answer)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_config() -> LoopConfig {
+        LoopConfig {
+            artifact: "README.md".to_string(),
+            goal: "repair docs".to_string(),
+            verify: "cargo test".to_string(),
+            max_iterations: 3,
+            model: "gpt-5.4-mini".to_string(),
+            sandbox: "workspace-write".to_string(),
+            approval_policy: "never".to_string(),
+        }
+    }
+
+    #[test]
+    fn codex_args_include_schema_and_output_file() {
+        let args = codex_args(&PathBuf::from("schema.json"), &PathBuf::from("answer.json"), &test_config());
+
+        assert_eq!(args[0], "exec");
+        assert!(args.contains(&"--sandbox".to_string()));
+        assert!(args.contains(&"workspace-write".to_string()));
+        assert!(args.contains(&"--ask-for-approval".to_string()));
+        assert!(args.contains(&"never".to_string()));
+        assert!(args.contains(&"--output-schema".to_string()));
+        assert!(args.contains(&"--output-last-message".to_string()));
+        assert_eq!(args.last().unwrap(), "-");
+    }
+}
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 2: Wire modules**
 
-Run: `python -m pytest tests/test_schemas.py tests/test_codex_exec.py -q`
+Modify `src/lib.rs`:
+
+```rust
+pub mod codex_exec;
+pub mod config;
+pub mod schema;
+```
+
+- [ ] **Step 3: Run tests**
+
+Run: `cargo test schema codex_exec --quiet`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/codex_loop/schemas.py src/codex_loop/codex_exec.py tests/test_schemas.py tests/test_codex_exec.py
-git commit -m "feat: add structured codex exec adapter"
+git add src/schema.rs src/codex_exec.rs src/lib.rs
+git commit -m "feat: add codex exec schema adapter"
 ```
 
-### Task 3: Verification And Record Persistence
+### Task 3: Verification, Workspace, And Records
 
 **Files:**
-- Create: `src/codex_loop/verify.py`
-- Create: `src/codex_loop/records.py`
-- Create: `tests/test_verify.py`
-- Create: `tests/test_records.py`
+- Create: `src/verify.rs`
+- Create: `src/record.rs`
+- Create: `src/workspace.rs`
+- Modify: `src/lib.rs`
 
 **Interfaces:**
-- Consumes: `LoopConfig.verify`
-- Produces: `run_verify(command: str, cwd: Path, timeout_seconds: int = 300) -> VerifyResult`
-- Produces: `write_record(record: dict, path: Path) -> None`
+- Produces: `run_verify(command: &str, cwd: &Path) -> anyhow::Result<VerifyResult>`
+- Produces: `write_record(record: &IterationRecord, path: &Path) -> anyhow::Result<()>`
+- Produces: `prepare_iteration_workspace(source_root: &Path, artifact: &str, iteration_dir: &Path) -> anyhow::Result<PathBuf>`
 
-- [ ] **Step 1: Write verification tests**
+- [ ] **Step 1: Add verification module**
 
-```python
-from pathlib import Path
+Create `src/verify.rs`:
 
-from codex_loop.verify import run_verify
+```rust
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::{path::Path, process::Command};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VerifyResult {
+    pub passed: bool,
+    pub returncode: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
 
-def test_run_verify_passes_for_zero_exit(tmp_path: Path):
-    result = run_verify("python -c 'print(123)'", tmp_path)
+pub fn run_verify(command: &str, cwd: &Path) -> Result<VerifyResult> {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/C", command]).current_dir(cwd).output()?
+    } else {
+        Command::new("sh").args(["-c", command]).current_dir(cwd).output()?
+    };
 
-    assert result.passed is True
-    assert result.returncode == 0
-    assert "123" in result.stdout
+    let returncode = output.status.code().unwrap_or(1);
+    Ok(VerifyResult {
+        passed: output.status.success(),
+        returncode,
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
-def test_run_verify_fails_for_nonzero_exit(tmp_path: Path):
-    result = run_verify("python -c 'import sys; sys.exit(7)'", tmp_path)
+    #[test]
+    fn verify_passes_for_zero_exit() {
+        let dir = tempdir().unwrap();
+        let result = run_verify("printf 123", dir.path()).unwrap();
+        assert!(result.passed);
+        assert_eq!(result.returncode, 0);
+        assert!(result.stdout.contains("123"));
+    }
 
-    assert result.passed is False
-    assert result.returncode == 7
+    #[test]
+    fn verify_fails_for_nonzero_exit() {
+        let dir = tempdir().unwrap();
+        let result = run_verify("exit 7", dir.path()).unwrap();
+        assert!(!result.passed);
+        assert_eq!(result.returncode, 7);
+    }
+}
 ```
 
-- [ ] **Step 2: Write record tests**
+- [ ] **Step 2: Add record module**
 
-```python
-import json
-from pathlib import Path
+Create `src/record.rs`:
 
-from codex_loop.records import write_record
+```rust
+use crate::verify::VerifyResult;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{fs, path::Path};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IterationRecord {
+    pub iteration: usize,
+    pub review: Value,
+    pub repair: Value,
+    pub validation: VerifyResult,
+    pub remaining_delta: Vec<String>,
+}
 
-def test_write_record_creates_parent_directory(tmp_path: Path):
-    path = tmp_path / "runs" / "iteration_1" / "record.json"
+pub fn write_record(record: &IterationRecord, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_string_pretty(record)?)?;
+    Ok(())
+}
 
-    write_record({"validation": {"passed": True}}, path)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::tempdir;
 
-    assert json.loads(path.read_text(encoding="utf-8"))["validation"]["passed"] is True
+    #[test]
+    fn write_record_creates_parent_directory() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("runs/iteration_1/record.json");
+        let record = IterationRecord {
+            iteration: 1,
+            review: json!({"findings": []}),
+            repair: json!({"changes_made": []}),
+            validation: VerifyResult {
+                passed: true,
+                returncode: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+            remaining_delta: vec![],
+        };
+
+        write_record(&record, &path).unwrap();
+        assert!(path.exists());
+    }
+}
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 3: Add workspace module**
 
-Run: `python -m pytest tests/test_verify.py tests/test_records.py -q`
+Create `src/workspace.rs`:
 
-Expected: FAIL because modules do not exist.
+```rust
+use anyhow::{Context, Result};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-- [ ] **Step 4: Implement verification runner**
+pub fn prepare_iteration_workspace(source_root: &Path, artifact: &str, iteration_dir: &Path) -> Result<PathBuf> {
+    let source = source_root.join(artifact);
+    let workspace = iteration_dir.join("workspace");
+    let target = workspace.join(artifact);
 
-Create `src/codex_loop/verify.py`:
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
 
-```python
-from __future__ import annotations
+    fs::copy(&source, &target)
+        .with_context(|| format!("failed to copy {} to {}", source.display(), target.display()))?;
+    Ok(target)
+}
 
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
+    #[test]
+    fn copies_artifact_into_iteration_workspace() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
 
-@dataclass(frozen=True)
-class VerifyResult:
-    passed: bool
-    returncode: int
-    stdout: str
-    stderr: str
+        let copied = prepare_iteration_workspace(dir.path(), "README.md", &dir.path().join("runs/it1")).unwrap();
 
-
-def run_verify(command: str, cwd: Path, timeout_seconds: int = 300) -> VerifyResult:
-    try:
-        result = subprocess.run(
-            command,
-            cwd=cwd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return VerifyResult(
-            passed=False,
-            returncode=124,
-            stdout=exc.stdout or "",
-            stderr=(exc.stderr or "") + f"\nTimed out after {timeout_seconds} seconds.",
-        )
-
-    return VerifyResult(
-        passed=result.returncode == 0,
-        returncode=result.returncode,
-        stdout=result.stdout,
-        stderr=result.stderr,
-    )
+        assert_eq!(fs::read_to_string(copied).unwrap(), "hello");
+    }
+}
 ```
 
-- [ ] **Step 5: Implement record writer**
+- [ ] **Step 4: Wire modules**
 
-Create `src/codex_loop/records.py`:
+Modify `src/lib.rs`:
 
-```python
-from __future__ import annotations
-
-import json
-from pathlib import Path
-from typing import Any
-
-
-def write_record(record: dict[str, Any], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+```rust
+pub mod codex_exec;
+pub mod config;
+pub mod record;
+pub mod schema;
+pub mod verify;
+pub mod workspace;
 ```
 
-- [ ] **Step 6: Run tests**
+- [ ] **Step 5: Run tests**
 
-Run: `python -m pytest tests/test_verify.py tests/test_records.py -q`
+Run: `cargo test verify record workspace --quiet`
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/codex_loop/verify.py src/codex_loop/records.py tests/test_verify.py tests/test_records.py
-git commit -m "feat: add verification and records"
+git add src/verify.rs src/record.rs src/workspace.rs src/lib.rs
+git commit -m "feat: add verification records and workspace"
 ```
 
-### Task 4: Iteration Runner And Stop Conditions
+### Task 4: Runner Stop Conditions And One-Iteration Dry Run
 
 **Files:**
-- Create: `src/codex_loop/runner.py`
-- Create: `tests/test_runner.py`
+- Create: `src/runner.rs`
+- Modify: `src/lib.rs`
 
 **Interfaces:**
 - Consumes: `LoopConfig`
-- Consumes: `run_codex_json`
 - Consumes: `run_verify`
-- Produces: `run_loop(config: LoopConfig, workspace: Path, runs_dir: Path) -> LoopSummary`
+- Consumes: `prepare_iteration_workspace`
+- Produces: `should_stop(iteration: usize, max_iterations: usize, validation_passed: bool, remaining_delta: &[String]) -> bool`
+- Produces: `run_loop(config: &LoopConfig, source_root: &Path, runs_dir: &Path) -> anyhow::Result<LoopSummary>`
 
-- [ ] **Step 1: Write runner stop-condition tests**
+- [ ] **Step 1: Add runner with stop condition tests**
 
-```python
-from pathlib import Path
+Create `src/runner.rs`:
 
-from codex_loop.config import LoopConfig
-from codex_loop.runner import should_stop
+```rust
+use crate::{
+    config::LoopConfig,
+    record::{write_record, IterationRecord},
+    verify::run_verify,
+    workspace::prepare_iteration_workspace,
+};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LoopSummary {
+    pub passed: bool,
+    pub iterations: usize,
+    pub final_record_path: Option<PathBuf>,
+}
 
-def test_should_stop_when_validation_passes():
-    assert should_stop(iteration=1, max_iterations=3, validation_passed=True, remaining_delta=["x"]) is True
+pub fn should_stop(
+    iteration: usize,
+    max_iterations: usize,
+    validation_passed: bool,
+    remaining_delta: &[String],
+) -> bool {
+    validation_passed || iteration >= max_iterations || remaining_delta.is_empty()
+}
 
+fn run_id() -> String {
+    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+    format!("run-{seconds}")
+}
 
-def test_should_stop_at_max_iterations():
-    assert should_stop(iteration=3, max_iterations=3, validation_passed=False, remaining_delta=["x"]) is True
+pub fn run_loop(config: &LoopConfig, source_root: &Path, runs_dir: &Path) -> Result<LoopSummary> {
+    let root = runs_dir.join(run_id());
+    let iteration_dir = root.join("iteration_1");
+    let copied = prepare_iteration_workspace(source_root, &config.artifact, &iteration_dir)?;
+    let validation = run_verify(&config.verify, source_root)?;
+    let remaining_delta = if validation.passed {
+        vec![]
+    } else {
+        vec![if validation.stderr.trim().is_empty() {
+            validation.stdout.clone()
+        } else {
+            validation.stderr.clone()
+        }]
+    };
 
+    let record = IterationRecord {
+        iteration: 1,
+        review: json!({"findings": []}),
+        repair: json!({
+            "artifact": config.artifact,
+            "iteration": 1,
+            "changes_made": [],
+            "unresolved_items": ["codex repair is enabled in the next task"],
+            "updated_artifact_path": copied
+        }),
+        validation,
+        remaining_delta,
+    };
 
-def test_should_continue_when_delta_remains_before_limit():
-    assert should_stop(iteration=1, max_iterations=3, validation_passed=False, remaining_delta=["x"]) is False
+    let record_path = iteration_dir.join("record.json");
+    write_record(&record, &record_path)?;
+    Ok(LoopSummary {
+        passed: record.validation.passed,
+        iterations: 1,
+        final_record_path: Some(record_path),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[test]
+    fn stops_when_validation_passes() {
+        assert!(should_stop(1, 3, true, &["x".to_string()]));
+    }
+
+    #[test]
+    fn stops_at_max_iterations() {
+        assert!(should_stop(3, 3, false, &["x".to_string()]));
+    }
+
+    #[test]
+    fn continues_when_delta_remains_before_limit() {
+        assert!(!should_stop(1, 3, false, &["x".to_string()]));
+    }
+
+    #[test]
+    fn dry_run_writes_record() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let config = LoopConfig {
+            artifact: "README.md".to_string(),
+            goal: "repair docs".to_string(),
+            verify: "printf ok".to_string(),
+            max_iterations: 3,
+            model: "gpt-5.4-mini".to_string(),
+            sandbox: "workspace-write".to_string(),
+            approval_policy: "never".to_string(),
+        };
+
+        let summary = run_loop(&config, dir.path(), &dir.path().join("runs")).unwrap();
+
+        assert!(summary.passed);
+        assert!(summary.final_record_path.unwrap().exists());
+    }
+}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Wire module**
 
-Run: `python -m pytest tests/test_runner.py -q`
+Modify `src/lib.rs`:
 
-Expected: FAIL because `runner.py` does not exist.
-
-- [ ] **Step 3: Implement stop condition and summary type**
-
-Create `src/codex_loop/runner.py`:
-
-```python
-from __future__ import annotations
-
-from dataclasses import dataclass
-from pathlib import Path
-
-from codex_loop.config import LoopConfig
-
-
-@dataclass(frozen=True)
-class LoopSummary:
-    passed: bool
-    iterations: int
-    final_record_path: Path | None
-
-
-def should_stop(iteration: int, max_iterations: int, validation_passed: bool, remaining_delta: list[str]) -> bool:
-    if validation_passed:
-        return True
-    if iteration >= max_iterations:
-        return True
-    if not remaining_delta:
-        return True
-    return False
-
-
-def run_loop(config: LoopConfig, workspace: Path, runs_dir: Path) -> LoopSummary:
-    raise NotImplementedError("Task 5 wires the full review/repair/verify loop.")
+```rust
+pub mod codex_exec;
+pub mod config;
+pub mod record;
+pub mod runner;
+pub mod schema;
+pub mod verify;
+pub mod workspace;
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 3: Run tests**
 
-Run: `python -m pytest tests/test_runner.py -q`
+Run: `cargo test runner --quiet`
+
+Expected: PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/runner.rs src/lib.rs
+git commit -m "feat: add loop runner dry run"
+```
+
+### Task 5: CLI Doctor And Run Commands
+
+**Files:**
+- Create: `src/main.rs`
+- Modify: `README.md`
+
+**Interfaces:**
+- Consumes: `LoopConfig::from_path`
+- Consumes: `run_loop`
+- Produces: `codex-loop doctor`
+- Produces: `codex-loop run --config examples/plaintext-loop.json`
+
+- [ ] **Step 1: Add CLI entrypoint**
+
+Create `src/main.rs`:
+
+```rust
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use codex_loop::{config::LoopConfig, runner::run_loop};
+use std::{
+    path::PathBuf,
+    process::Command,
+};
+
+#[derive(Debug, Parser)]
+#[command(name = "codex-loop")]
+#[command(about = "Run auditable iterative repair loops with Codex CLI")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    Doctor,
+    Run {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, default_value = "runs")]
+        runs_dir: PathBuf,
+    },
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Doctor => doctor(),
+        Commands::Run { config, runs_dir } => {
+            let config = LoopConfig::from_path(&config)?;
+            let summary = run_loop(&config, &std::env::current_dir()?, &runs_dir)?;
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+            if summary.passed {
+                Ok(())
+            } else {
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+fn doctor() -> Result<()> {
+    let output = Command::new("codex")
+        .arg("--version")
+        .output()
+        .context("failed to run codex --version")?;
+
+    if !output.status.success() {
+        anyhow::bail!("codex --version failed");
+    }
+
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    Ok(())
+}
+```
+
+- [ ] **Step 2: Run CLI smoke checks**
+
+Run: `cargo run -- doctor`
+
+Expected: prints current `codex-cli` version and exits 0.
+
+Run: `cargo run -- run --config examples/plaintext-loop.json`
+
+Expected: creates `runs/<run-id>/iteration_1/record.json`. It may exit 1 until implementation tests exist, because `cargo test --quiet` is the configured verify command.
+
+- [ ] **Step 3: Update README**
+
+Add:
+
+````markdown
+## Rust CLI Direction
+
+The implementation target is a Rust single-binary CLI.
+
+```bash
+cargo run -- doctor
+cargo run -- run --config examples/plaintext-loop.json
+```
+
+P0 only writes candidate artifacts under `runs/<run-id>/`. It does not apply repairs back to source files.
+````
+
+- [ ] **Step 4: Run full checks**
+
+Run: `cargo test --quiet`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/codex_loop/runner.py tests/test_runner.py
-git commit -m "feat: add loop stop conditions"
+git add src/main.rs README.md
+git commit -m "feat: add rust cli entrypoint"
 ```
 
-### Task 5: CLI Entry Point And First End-To-End Dry Run
+### Task 6: Enable Real Review And Repair Iterations
 
 **Files:**
-- Create: `src/codex_loop/cli.py`
-- Modify: `src/codex_loop/runner.py`
-- Create: `tests/test_cli.py`
+- Modify: `src/runner.rs`
+- Modify: `src/codex_exec.rs`
+- Modify: `src/schema.rs`
 - Modify: `README.md`
 
 **Interfaces:**
-- Consumes: `LoopConfig.from_file`
-- Consumes: `run_loop`
-- Produces: `main(argv: list[str] | None = None) -> int`
+- Consumes: `run_codex_json`
+- Consumes: `review_schema`
+- Consumes: `repair_schema`
+- Produces: one full `review -> repair -> verify -> record` loop
 
-- [ ] **Step 1: Write CLI argument test**
+- [ ] **Step 1: Add prompt builders inside `src/runner.rs`**
 
-```python
-from codex_loop.cli import parse_args
+Add these functions:
 
+```rust
+fn review_prompt(config: &LoopConfig, artifact_text: &str) -> String {
+    format!(
+        "You are reviewing an artifact before repair.\nArtifact: {}\nGoal: {}\nDo not edit files. Return concise structured findings.\n\n{}",
+        config.artifact, config.goal, artifact_text
+    )
+}
 
-def test_parse_run_config():
-    args = parse_args(["run", "--config", "examples/plaintext-loop.json"])
-
-    assert args.command == "run"
-    assert args.config == "examples/plaintext-loop.json"
+fn repair_prompt(config: &LoopConfig, editable_path: &Path, findings: &serde_json::Value, remaining_delta: &[String], iteration: usize) -> String {
+    format!(
+        "You are repairing a copied artifact.\nEditable copy: {}\nIteration: {}\nGoal: {}\nMake the smallest useful edits. Edit only the editable copy. Do not claim validation passed.\nReview findings: {}\nRemaining validation delta: {}",
+        editable_path.display(),
+        iteration,
+        config.goal,
+        findings,
+        serde_json::to_string_pretty(remaining_delta).unwrap()
+    )
+}
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Replace dry-run review/repair placeholders**
 
-Run: `python -m pytest tests/test_cli.py -q`
+In `run_loop`, for each iteration:
 
-Expected: FAIL because `cli.py` does not exist.
+1. Read the copied artifact text.
+2. Call `run_codex_json(review_prompt, review_schema(), iteration_dir/review, config)`.
+3. Call `run_codex_json(repair_prompt, repair_schema(), iteration_dir/repair, config)`.
+4. Run `verify`.
+5. Write `record.json`.
+6. Stop when `should_stop(...)` returns true.
 
-- [ ] **Step 3: Implement CLI parser**
+- [ ] **Step 3: Keep tests deterministic**
 
-Create `src/codex_loop/cli.py`:
+Do not unit-test by calling the real Codex CLI. Extract the phase execution behind a small trait only if tests need to simulate `run_codex_json`; otherwise keep real Codex coverage as a manual smoke check.
 
-```python
-from __future__ import annotations
+- [ ] **Step 4: Manual smoke check**
 
-import argparse
-from pathlib import Path
-
-from codex_loop.config import LoopConfig
-from codex_loop.runner import run_loop
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="codex-loop")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--config", required=True)
-    run_parser.add_argument("--runs-dir", default="runs")
-
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    if args.command == "run":
-        config = LoopConfig.from_file(Path(args.config))
-        summary = run_loop(config, Path.cwd(), Path(args.runs_dir))
-        return 0 if summary.passed else 1
-    return 2
-```
-
-- [ ] **Step 4: Run CLI tests**
-
-Run: `python -m pytest tests/test_cli.py -q`
-
-Expected: PASS.
-
-- [ ] **Step 5: Wire `run_loop` with a dry-run-safe first pass**
-
-Modify `src/codex_loop/runner.py` so `run_loop` creates `runs/<run-id>/iteration_1/record.json`, copies the artifact, runs `verify`, and stores validation output. Do not call `codex exec` yet in this step.
-
-Expected minimal implementation:
-
-```python
-from __future__ import annotations
-
-import shutil
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-
-from codex_loop.config import LoopConfig
-from codex_loop.records import write_record
-from codex_loop.verify import run_verify
-
-
-@dataclass(frozen=True)
-class LoopSummary:
-    passed: bool
-    iterations: int
-    final_record_path: Path | None
-
-
-def should_stop(iteration: int, max_iterations: int, validation_passed: bool, remaining_delta: list[str]) -> bool:
-    if validation_passed:
-        return True
-    if iteration >= max_iterations:
-        return True
-    if not remaining_delta:
-        return True
-    return False
-
-
-def run_loop(config: LoopConfig, workspace: Path, runs_dir: Path) -> LoopSummary:
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    iteration_dir = runs_dir / run_id / "iteration_1"
-    iteration_dir.mkdir(parents=True, exist_ok=True)
-
-    source = workspace / config.artifact
-    copied = iteration_dir / config.artifact.name
-    shutil.copy2(source, copied)
-
-    verify_result = run_verify(config.verify, workspace)
-    remaining_delta = [] if verify_result.passed else [verify_result.stderr or verify_result.stdout]
-    record = {
-        "review": [],
-        "repair": {
-            "artifact": str(config.artifact),
-            "iteration": 1,
-            "changes_made": [],
-            "unresolved_items": ["codex repair is enabled in the next task"],
-            "updated_artifact_path": str(copied),
-        },
-        "validation": {
-            "passed": verify_result.passed,
-            "returncode": verify_result.returncode,
-            "stdout": verify_result.stdout,
-            "stderr": verify_result.stderr,
-            "remaining_delta": remaining_delta,
-        },
-    }
-    record_path = iteration_dir / "record.json"
-    write_record(record, record_path)
-    return LoopSummary(passed=verify_result.passed, iterations=1, final_record_path=record_path)
-```
-
-- [ ] **Step 6: Run full test suite**
-
-Run: `python -m pytest -q`
-
-Expected: PASS.
-
-- [ ] **Step 7: Update README usage**
-
-Add:
-
-````markdown
-## Local Dry Run
+Run:
 
 ```bash
-python -m pip install -e .
-codex-loop run --config examples/plaintext-loop.json
+cargo run -- run --config examples/plaintext-loop.json --runs-dir runs
 ```
 
-The first dry-run milestone writes `runs/<run-id>/iteration_1/record.json` and verifies the target command without applying repairs back to the source artifact.
-````
+Expected:
 
-- [ ] **Step 8: Commit**
+- `runs/<run-id>/iteration_1/review/answer.json` exists.
+- `runs/<run-id>/iteration_1/repair/answer.json` exists.
+- `runs/<run-id>/iteration_1/record.json` exists.
+- Source `README.md` is not overwritten.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/codex_loop/cli.py src/codex_loop/runner.py tests/test_cli.py README.md
-git commit -m "feat: add codex loop cli dry run"
+git add src/runner.rs src/codex_exec.rs src/schema.rs README.md
+git commit -m "feat: run codex review repair loop"
 ```
 
 ## Self-Review
 
-- Spec coverage: The plan covers config, schema output, Codex invocation, verification, records, stop conditions, and CLI entrypoint.
+- Spec coverage: Rust plan covers config, schema output, Codex invocation, verification, run workspace, records, stop conditions, CLI, and real review/repair integration.
 - Placeholder scan: No placeholder markers or undefined implementation steps remain.
-- Type consistency: The interfaces use `LoopConfig`, `LoopSummary`, `VerifyResult`, and `run_codex_json` consistently across tasks.
-- Scope check: This is one bounded MVP. Plugin packaging, daemon mode, UI, patch application, and CI integration are intentionally deferred.
+- Type consistency: `LoopConfig`, `VerifyResult`, `IterationRecord`, `LoopSummary`, `run_codex_json`, and `run_loop` are used consistently across tasks.
+- Scope check: This remains one bounded MVP. Patch application, UI, daemon mode, plugin packaging, and CI integration are intentionally deferred.
 
 ## Execution Options
 
@@ -814,8 +1001,8 @@ Plan complete and saved to `docs/superpowers/plans/2026-06-30-codex-loop-impleme
 1. Subagent-Driven (recommended): dispatch a fresh subagent per task, review between tasks, fast iteration.
 2. Inline Execution: execute tasks in this session using executing-plans, batch execution with checkpoints.
 
-Recommended next command after repo setup:
+Recommended first implementation command:
 
 ```bash
-python -m pytest -q
+cargo test --quiet
 ```
