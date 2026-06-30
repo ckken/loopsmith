@@ -118,11 +118,12 @@ terraform apply
 2. 编写小范围配置文件。
 3. 执行 `loopsmith doctor` 检查 Codex CLI 可用性。
 4. 执行 `loopsmith run --config <config>`。
-5. 查看最后一轮 `record.json`、`review/answer.json`、`repair/answer.json` 和验证输出。
-6. 人工检查 `runs/<run-id>/iteration_N/workspace/` 里的候选文件。
-7. 确认后再手动把候选改动应用回源工作区。
+5. 执行 `loopsmith inspect` 查看最新 run 的状态、summary、最终候选文件和每轮验证结果。
+6. 执行 `loopsmith diff` 对比源文件和最终候选文件。
+7. 执行 `loopsmith apply --dry-run` 确认源文件没有在 run 开始后被人工改动。
+8. 人工确认 diff 后执行 `loopsmith apply --verify`，把候选文件应用回源工作区并运行验证命令。
 
-当前版本不应该自动 apply。原因是 P0 阶段更重要的是把“模型做了什么、验证为什么通过或失败”记录清楚。
+`apply` 是显式命令，不会在 `run` 后自动执行。默认情况下，如果源文件在 run 开始后发生变化，`apply` 会拒绝覆盖；只有确认要覆盖人工改动时才使用 `--force`。
 
 ## 审计记录
 
@@ -150,6 +151,8 @@ terraform apply
 - `approval_policy = never`
 - 只复制候选 workspace。
 - 不读取或写入 `.git`、`target`、`runs*` 等目录。
+- `run` 不直接覆盖源文件；只有显式执行 `apply` 才会写回源工作区。
+- `apply` 默认校验源文件 hash，发现 run 开始后的人工改动会停止。
 - 不在自动测试里真实调用 Codex 模型。
 
 对于涉及密钥、生产配置、外部服务、数据库迁移的任务，应该把 loop 降级为“建议生成器”，由人工执行最终操作。
@@ -214,15 +217,18 @@ P0 已具备：
 - 配置读取和校验。
 - review / repair / verify / record 闭环。
 - 候选 workspace 隔离。
+- run manifest / index / summary。
+- `inspect` / `diff` / `apply` 最小验收链路。
 - fake executor 测试覆盖。
 
 下一步建议：
 
-1. 增加显式 `apply` 命令，但默认仍需人工确认。
-2. 在 `record.json` 中记录实际使用模型、reasoning effort 和耗时。
-3. 增加 per-phase timeout / retry。
-4. 支持多 review agent，但 repair 保持单 writer。
-5. 增加更完整的 diff 展示和人工验收报告。
+1. 增加 resume，让失败或中断的 run 可以从最近一轮继续。
+2. 增加 workflow profile，把小修、测试补齐、文档修复、重构试点拆成不同默认策略。
+3. 在 `record.json` 中记录实际使用模型、reasoning effort 和耗时。
+4. 增加 per-phase timeout / retry。
+5. 支持多 review agent，但 repair 保持单 writer。
+6. 增加更完整的 diff 展示和人工验收报告。
 
 判断是否可以进入真实项目试点的标准：
 

@@ -184,7 +184,7 @@ Create `Cargo.toml`:
 ```toml
 [package]
 name = "loopsmith"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Auditable iterative repair loops driven by Codex CLI"
@@ -902,7 +902,7 @@ cargo run -- doctor
 cargo run -- run --config examples/plaintext-loop.json
 ```
 
-P0 only writes candidate artifacts under `runs/<run-id>/`. It does not apply repairs back to source files.
+Initial P0 only wrote candidate artifacts under `runs/<run-id>/`. The current minimal workflow adds explicit `inspect`, `diff`, and `apply` commands; see `2026-06-30-loopsmith-vibecoding-workflow-plan.md`.
 ````
 
 - [ ] **Step 4: Run full checks**

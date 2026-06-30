@@ -40,16 +40,16 @@
 
 ```bash
 gh auth login
-gh release download v0.1.0 -R ckken/loopsmith -p 'loopsmith-v0.1.0-aarch64-apple-darwin.tar.gz'
-tar -xzf loopsmith-v0.1.0-aarch64-apple-darwin.tar.gz
-sudo install -m 0755 loopsmith-v0.1.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.2.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
 loopsmith doctor
 ```
 
 从源码安装：
 
 ```bash
-cargo install --git https://github.com/ckken/loopsmith --tag v0.1.0
+cargo install --git https://github.com/ckken/loopsmith --tag v0.2.0
 loopsmith doctor
 ```
 
@@ -61,6 +61,27 @@ loopsmith doctor
 loopsmith doctor
 loopsmith run --config examples/plaintext-loop.json
 ```
+
+## 最小 vibecoding 工作流
+
+一次完整的最小工作流：
+
+```bash
+loopsmith run --config examples/plaintext-loop.json
+loopsmith inspect
+loopsmith diff
+loopsmith apply --dry-run
+loopsmith apply --verify
+```
+
+命令说明：
+
+- `loopsmith run`：创建候选 workspace，执行 review / repair / verify 循环。
+- `loopsmith inspect [RUN_ID]`：查看 run 状态、迭代记录、最终候选文件和 summary 路径；不传 `RUN_ID` 时读取最新 run。
+- `loopsmith diff [RUN_ID] --iteration N`：对比源文件和指定轮次候选文件。
+- `loopsmith apply [RUN_ID] --iteration N --dry-run`：只检查是否可以应用，不写源文件。
+- `loopsmith apply [RUN_ID] --iteration N --verify`：把候选文件应用回源工作区，并运行该 run 的验证命令。
+- `loopsmith apply --force`：源文件在 run 开始后发生变化时仍强制应用；默认会拒绝覆盖。
 
 开发阶段也可以直接通过 Cargo 运行：
 
@@ -126,6 +147,8 @@ loopsmith run --config examples/plaintext-loop.json
 
 ```text
 runs/<run-id>/
+  manifest.json
+  summary.md
   iteration_1/
     workspace/
     review/
@@ -141,9 +164,10 @@ runs/<run-id>/
       stdout.txt
       stderr.txt
     record.json
+runs/index.json
 ```
 
-运行摘要会输出到终端；每轮的审计材料写入对应 `iteration_N/` 目录。
+运行摘要会输出到终端；每轮的审计材料写入对应 `iteration_N/` 目录。`manifest.json` 记录 run 级状态，`summary.md` 是人工验收摘要，`runs/index.json` 用于定位最新 run。
 
 `runs/` 已被 `.gitignore` 忽略，不应提交到仓库。
 
@@ -153,6 +177,7 @@ runs/<run-id>/
 
 - [docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md](docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md)
 - [docs/loopsmith-best-practices.md](docs/loopsmith-best-practices.md)
+- [docs/acceptance.md](docs/acceptance.md)
 - [docs/release.md](docs/release.md)
 
 当前核心模块：
@@ -164,12 +189,14 @@ runs/<run-id>/
 - `record`：写入每轮审计记录。
 - `workspace`：创建候选工作区并复制目标文件。
 - `runner`：编排迭代和停止条件。
+- `run_state`：维护 run manifest、index、summary、inspect、diff 和 apply。
 - `main`：提供 CLI 入口。
 
 ## 当前状态
 
 - Rust CLI 骨架已实现。
 - 已用当前项目真实跑通一轮 `codex exec` review/repair loop。
-- 当前版本仍是 P0：候选修复只留在 `runs/<run-id>/`，不会自动 apply 回源文件。
+- 已具备最小 vibecoding 工作流：`run` 生成候选修复，`inspect` 查看状态，`diff` 对比候选，`apply --dry-run` 做写回前检查，`apply --verify` 显式写回并重新验证。
+- `apply` 默认校验源文件 hash，避免覆盖 run 开始后的人工修改。
 
-下一步建议：增加显式 `apply` 命令，把人工确认后的候选 patch 应用回源工作区。
+下一步建议：增加 resume、workflow profile 和多 review agent；repair 阶段仍保持单 writer。

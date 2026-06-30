@@ -2,6 +2,9 @@ use crate::{
     codex_exec::run_codex_json,
     config::LoopConfig,
     record::{IterationRecord, write_record},
+    run_state::{
+        RunManifest, RunStatus, artifact_hash, write_manifest_and_index, write_run_summary,
+    },
     schema::{repair_schema, review_schema},
     verify::run_verify,
     workspace::prepare_iteration_workspace,
@@ -17,9 +20,13 @@ use std::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LoopSummary {
+    pub run_id: String,
+    pub run_dir: PathBuf,
     pub passed: bool,
     pub iterations: usize,
     pub final_record_path: Option<PathBuf>,
+    pub final_artifact_path: Option<PathBuf>,
+    pub summary_path: Option<PathBuf>,
 }
 
 pub fn should_stop(
@@ -32,11 +39,18 @@ pub fn should_stop(
 }
 
 fn run_id() -> String {
-    let seconds = SystemTime::now()
+    let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
-        .as_secs();
-    format!("run-{seconds}")
+        .as_millis();
+    format!("run-{millis}")
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub fn run_loop(config: &LoopConfig, source_root: &Path, runs_dir: &Path) -> Result<LoopSummary> {
@@ -119,10 +133,32 @@ pub fn run_loop_with_executor(
     runs_dir: &Path,
     executor: &dyn PhaseExecutor,
 ) -> Result<LoopSummary> {
-    let root = runs_dir.join(run_id());
+    let run_id = run_id();
+    let root = runs_dir.join(&run_id);
+    let source_artifact = source_root.join(&config.artifact);
+    let source_artifact_hash = artifact_hash(&source_artifact)?;
+    let mut manifest = RunManifest {
+        run_id: run_id.clone(),
+        artifact: config.artifact.clone(),
+        goal: config.goal.clone(),
+        verify: config.verify.clone(),
+        max_iterations: config.max_iterations,
+        source_artifact_hash,
+        started_at_unix: unix_seconds(),
+        finished_at_unix: None,
+        status: RunStatus::Running,
+        iterations: 0,
+        final_record_path: None,
+        final_artifact_path: None,
+        summary_path: Some(format!("{run_id}/summary.md")),
+    };
+    write_manifest_and_index(&manifest, runs_dir)?;
+
     let mut workspace_source = source_root.to_path_buf();
     let mut remaining_delta = Vec::new();
     let mut final_record_path = None;
+    let mut final_artifact_path = None;
+    let mut summary_path = None;
 
     for iteration in 1..=config.max_iterations {
         let iteration_dir = root.join(format!("iteration_{iteration}"));
@@ -162,26 +198,55 @@ pub fn run_loop_with_executor(
         let record_path = iteration_dir.join("record.json");
         write_record(&record, &record_path)?;
         final_record_path = Some(record_path);
+        final_artifact_path = Some(workspace_root.join(&config.artifact));
         workspace_source = workspace_root;
 
-        if should_stop(
+        let should_stop = should_stop(
             iteration,
             config.max_iterations,
             record.validation.passed,
             &remaining_delta,
-        ) {
+        );
+        manifest.iterations = iteration;
+        manifest.final_record_path = Some(format!("{run_id}/iteration_{iteration}/record.json"));
+        manifest.final_artifact_path = Some(format!(
+            "{run_id}/iteration_{iteration}/workspace/{}",
+            config.artifact
+        ));
+        manifest.status = if record.validation.passed {
+            RunStatus::Passed
+        } else if should_stop {
+            RunStatus::Failed
+        } else {
+            RunStatus::Running
+        };
+        if manifest.status != RunStatus::Running {
+            manifest.finished_at_unix = Some(unix_seconds());
+        }
+        write_manifest_and_index(&manifest, runs_dir)?;
+        summary_path = Some(write_run_summary(runs_dir, &manifest)?);
+
+        if should_stop {
             return Ok(LoopSummary {
+                run_id,
+                run_dir: root,
                 passed: record.validation.passed,
                 iterations: iteration,
                 final_record_path,
+                final_artifact_path,
+                summary_path,
             });
         }
     }
 
     Ok(LoopSummary {
+        run_id,
+        run_dir: root,
         passed: false,
         iterations: config.max_iterations,
         final_record_path,
+        final_artifact_path,
+        summary_path,
     })
 }
 
@@ -323,6 +388,30 @@ mod tests {
 
         assert!(summary.passed);
         assert!(summary.final_record_path.unwrap().exists());
+    }
+
+    #[test]
+    fn run_loop_writes_manifest_index_and_summary() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let runs_dir = dir.path().join("runs");
+        let config = test_config(&passing_verify("ok"), 3);
+
+        let summary =
+            run_loop_with_executor(&config, dir.path(), &runs_dir, &FakePhaseExecutor).unwrap();
+
+        assert!(summary.run_dir.join("manifest.json").exists());
+        assert!(summary.summary_path.unwrap().exists());
+        assert!(runs_dir.join("index.json").exists());
+
+        let manifest_text = fs::read_to_string(summary.run_dir.join("manifest.json")).unwrap();
+        let manifest: crate::run_state::RunManifest = serde_json::from_str(&manifest_text).unwrap();
+
+        assert_eq!(manifest.run_id, summary.run_id);
+        assert_eq!(manifest.artifact, "README.md");
+        assert_eq!(manifest.iterations, 1);
+        assert_eq!(manifest.status, crate::run_state::RunStatus::Passed);
+        assert!(manifest.final_artifact_path.unwrap().contains("README.md"));
     }
 
     #[test]
