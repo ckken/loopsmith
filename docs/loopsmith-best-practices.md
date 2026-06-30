@@ -1,8 +1,8 @@
 # Loopsmith 最佳实践
 
-**Loopsmith：把 AI 修复锻造成可验证结果的本地 CLI。**
+**Loopsmith：用可审计的 review、repair、verify 循环，自动编排 Codex 模型调用、候选 workspace、验证命令、迭代状态和审计记录，把 AI 生成的候选修复推进到可验证结果。**
 
-本文面向 `loopsmith` 的真实落地使用，目标是让 Codex 修复闭环可控、可审计、可复现，而不是把模型输出直接当作最终结果。
+本文面向 `loopsmith` 的真实落地使用，目标是让 Codex 自动化修复编排流程可控、可审计、可复现，而不是把模型输出直接当作最终结果。
 
 ## 核心原则
 
