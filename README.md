@@ -121,6 +121,7 @@ runs/<run-id>/
 详细 Rust 实施计划见：
 
 - [docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md](docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md)
+- [docs/codex-loop-best-practices.md](docs/codex-loop-best-practices.md)
 
 当前核心模块：
 
