@@ -8,6 +8,8 @@
   <em>他把修复放进循环里锻造，直到验证能说话。</em>
 </p>
 
+**Loopsmith：把 AI 修复锻造成可验证结果的本地 CLI。**
+
 `loopsmith` 是一个面向 Codex CLI 的本地迭代修复工具，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
 
 当前实现方向是 **Rust 单二进制 CLI**。仓库已具备最小可运行闭环：`doctor` 能检测本机 Codex CLI，`run` 能复制当前项目到候选工作区、调用 `codex exec` 执行 review/repair、运行机械验证并写入 `record.json`。
