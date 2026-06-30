@@ -61,11 +61,12 @@ pub struct CodexPhaseExecutor;
 
 impl PhaseExecutor for CodexPhaseExecutor {
     fn review(&self, config: &LoopConfig, artifact_text: &str, run_dir: &Path) -> Result<Value> {
+        let phase_config = config.review_phase_config();
         run_codex_json(
             &review_prompt(config, artifact_text),
             &review_schema(),
             run_dir,
-            config,
+            &phase_config,
         )
     }
 
@@ -78,11 +79,12 @@ impl PhaseExecutor for CodexPhaseExecutor {
         iteration: usize,
         run_dir: &Path,
     ) -> Result<Value> {
+        let phase_config = config.repair_phase_config();
         run_codex_json(
             &repair_prompt(config, editable_path, findings, remaining_delta, iteration),
             &repair_schema(),
             run_dir,
-            config,
+            &phase_config,
         )
     }
 }
@@ -266,6 +268,9 @@ mod tests {
             verify: verify.to_string(),
             max_iterations,
             model: "gpt-5.5".to_string(),
+            review_model: None,
+            repair_model: None,
+            model_reasoning_effort: "low".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
         }

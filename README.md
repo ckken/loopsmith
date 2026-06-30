@@ -59,6 +59,9 @@ codex-loop run --config examples/plaintext-loop.json
   "verify": "cargo test --quiet",
   "max_iterations": 3,
   "model": "gpt-5.5",
+  "review_model": "gpt-5.4",
+  "repair_model": "gpt-5.4-mini",
+  "model_reasoning_effort": "low",
   "sandbox": "workspace-write",
   "approval_policy": "never"
 }
@@ -70,9 +73,21 @@ codex-loop run --config examples/plaintext-loop.json
 - `goal`：本轮修复目标。
 - `verify`：机械验证命令。
 - `max_iterations`：最大迭代次数。
-- `model`：传给 `codex exec --model` 的模型。
+- `model`：默认传给 `codex exec --model` 的模型。
+- `review_model`：可选，review 阶段模型；未配置时回退到 `model`。
+- `repair_model`：可选，repair 阶段模型；未配置时回退到 `model`。
+- `model_reasoning_effort`：传给 `codex exec --config model_reasoning_effort="..."` 的推理强度，当前支持 `low`、`medium`、`high`、`xhigh`。
 - `sandbox`：传给 `codex exec --sandbox` 的权限边界。
 - `approval_policy`：传给 Codex 顶层 `-a` 参数的审批策略。
+
+当前建议模型：
+
+- `gpt-5.5`：复杂修复、跨模块分析和高风险变更的默认稳妥选择。
+- `gpt-5.4`：日常代码 review / repair，适合放在 `review_model`。
+- `gpt-5.4-mini`：更快、更省的简单修复，适合低风险 `repair_model`。
+- `gpt-5.3-codex-spark`：超快编码模型；如果当前账号/环境可用，可用于低风险 repair 或快速试跑。
+
+模型名会原样透传给 Codex CLI。项目只校验空值，不限制必须来自上述清单，避免未来新增模型时需要立即改代码。
 
 ## 产物目录
 
