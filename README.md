@@ -34,7 +34,28 @@
 - 默认只修改 `runs/<run-id>/` 下的候选工作区，不直接覆盖源文件。
 - 第一版不做 UI、不做 daemon、不做数据库、不做远程调度。
 
-## 使用方式
+## 安装
+
+从 GitHub Release 安装预编译二进制：
+
+```bash
+gh auth login
+gh release download v0.1.0 -R ckken/loopsmith -p 'loopsmith-v0.1.0-aarch64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.1.0-aarch64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.1.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+loopsmith doctor
+```
+
+从源码安装：
+
+```bash
+cargo install --git https://github.com/ckken/loopsmith --tag v0.1.0
+loopsmith doctor
+```
+
+更多平台安装方法和发布流程见 [docs/release.md](docs/release.md)。
+
+## 基本使用
 
 ```bash
 loopsmith doctor
@@ -132,6 +153,7 @@ runs/<run-id>/
 
 - [docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md](docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md)
 - [docs/loopsmith-best-practices.md](docs/loopsmith-best-practices.md)
+- [docs/release.md](docs/release.md)
 
 当前核心模块：
 
