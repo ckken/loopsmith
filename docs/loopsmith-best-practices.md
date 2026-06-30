@@ -1,10 +1,10 @@
-# codex-loop 最佳实践
+# Loopsmith 最佳实践
 
-本文面向 `codex-loop` 的真实落地使用，目标是让 Codex 修复闭环可控、可审计、可复现，而不是把模型输出直接当作最终结果。
+本文面向 `loopsmith` 的真实落地使用，目标是让 Codex 修复闭环可控、可审计、可复现，而不是把模型输出直接当作最终结果。
 
 ## 核心原则
 
-`codex-loop` 应该被当作“候选修复生成器”，而不是自动合并器。它负责在隔离工作区里让 Codex 执行 review / repair，并通过机械验证命令判断候选结果是否可进入人工验收。
+`loopsmith` 应该被当作“候选修复生成器”，而不是自动合并器。它负责在隔离工作区里让 Codex 执行 review / repair，并通过机械验证命令判断候选结果是否可进入人工验收。
 
 推荐坚持以下原则：
 
@@ -80,7 +80,7 @@
 
 ## 验证命令
 
-验证命令是整个 loop 的最终裁判。没有可靠验证命令时，`codex-loop` 只能生成候选结果，不能判断是否完成。
+验证命令是整个 loop 的最终裁判。没有可靠验证命令时，`loopsmith` 只能生成候选结果，不能判断是否完成。
 
 好的验证命令应该满足：
 
@@ -114,8 +114,8 @@ terraform apply
 
 1. 确认当前工作区状态干净，或至少知道哪些改动是人工保留的。
 2. 编写小范围配置文件。
-3. 执行 `codex-loop doctor` 检查 Codex CLI 可用性。
-4. 执行 `codex-loop run --config <config>`。
+3. 执行 `loopsmith doctor` 检查 Codex CLI 可用性。
+4. 执行 `loopsmith run --config <config>`。
 5. 查看最后一轮 `record.json`、`review/answer.json`、`repair/answer.json` 和验证输出。
 6. 人工检查 `runs/<run-id>/iteration_N/workspace/` 里的候选文件。
 7. 确认后再手动把候选改动应用回源工作区。

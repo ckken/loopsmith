@@ -1,13 +1,13 @@
 [package]
-name = "codex-loop"
+name = "loopsmith"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Auditable iterative repair loops driven by Codex CLI"
+description = "Auditable repair loops forged with Codex CLI"
 license = "MIT"
 
 [[bin]]
-name = "codex-loop"
+name = "loopsmith"
 path = "src/main.rs"
 
 [dependencies]

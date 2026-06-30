@@ -2,7 +2,7 @@ use assert_cmd::Command;
 
 #[test]
 fn cli_help_lists_available_commands() {
-    let assert = Command::cargo_bin("codex-loop")
+    let assert = Command::cargo_bin("loopsmith")
         .unwrap()
         .arg("--help")
         .assert()
@@ -15,7 +15,7 @@ fn cli_help_lists_available_commands() {
 
 #[test]
 fn cli_run_with_missing_config_fails_before_codex_exec() {
-    let assert = Command::cargo_bin("codex-loop")
+    let assert = Command::cargo_bin("loopsmith")
         .unwrap()
         .args(["run", "--config", "missing.json"])
         .assert()

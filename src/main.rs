@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use codex_loop::{config::LoopConfig, runner::run_loop};
+use loopsmith::{config::LoopConfig, runner::run_loop};
 use std::{path::PathBuf, process::Command};
 
 #[derive(Debug, Parser)]
-#[command(name = "codex-loop")]
+#[command(name = "loopsmith")]
 #[command(about = "Run auditable iterative repair loops with Codex CLI")]
 struct Cli {
     #[command(subcommand)]

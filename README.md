@@ -1,6 +1,14 @@
-# codex-loop
+<p align="center">
+  <img src="assets/logo.png" width="220" alt="Loopsmith logo">
+</p>
 
-`codex-loop` 是一个面向 Codex CLI 的本地迭代修复工具规划仓库，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
+<h1 align="center">Loopsmith</h1>
+
+<p align="center">
+  <em>他把修复放进循环里锻造，直到验证能说话。</em>
+</p>
+
+`loopsmith` 是一个面向 Codex CLI 的本地迭代修复工具，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
 
 当前实现方向是 **Rust 单二进制 CLI**。仓库已具备最小可运行闭环：`doctor` 能检测本机 Codex CLI，`run` 能复制当前项目到候选工作区、调用 `codex exec` 执行 review/repair、运行机械验证并写入 `record.json`。
 
@@ -27,8 +35,8 @@
 ## 使用方式
 
 ```bash
-codex-loop doctor
-codex-loop run --config examples/plaintext-loop.json
+loopsmith doctor
+loopsmith run --config examples/plaintext-loop.json
 ```
 
 开发阶段也可以直接通过 Cargo 运行：
@@ -42,8 +50,8 @@ cargo run -- run --config examples/plaintext-loop.json
 
 ```bash
 cargo install --path . --force
-codex-loop doctor
-codex-loop run --config examples/plaintext-loop.json
+loopsmith doctor
+loopsmith run --config examples/plaintext-loop.json
 ```
 
 `run` 默认会把候选项目复制到 `runs/<run-id>/iteration_N/workspace/`，源文件不会被直接覆盖。
@@ -120,8 +128,8 @@ runs/<run-id>/
 
 详细 Rust 实施计划见：
 
-- [docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md](docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md)
-- [docs/codex-loop-best-practices.md](docs/codex-loop-best-practices.md)
+- [docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md](docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md)
+- [docs/loopsmith-best-practices.md](docs/loopsmith-best-practices.md)
 
 当前核心模块：
 

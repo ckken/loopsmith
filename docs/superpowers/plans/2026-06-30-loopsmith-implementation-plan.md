@@ -183,7 +183,7 @@ Create `Cargo.toml`:
 
 ```toml
 [package]
-name = "codex-loop"
+name = "loopsmith"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -191,7 +191,7 @@ description = "Auditable iterative repair loops driven by Codex CLI"
 license = "MIT"
 
 [[bin]]
-name = "codex-loop"
+name = "loopsmith"
 path = "src/main.rs"
 
 [dependencies]
@@ -811,8 +811,8 @@ git commit -m "feat: add loop runner dry run"
 **Interfaces:**
 - Consumes: `LoopConfig::from_path`
 - Consumes: `run_loop`
-- Produces: `codex-loop doctor`
-- Produces: `codex-loop run --config examples/plaintext-loop.json`
+- Produces: `loopsmith doctor`
+- Produces: `loopsmith run --config examples/plaintext-loop.json`
 
 - [ ] **Step 1: Add CLI entrypoint**
 
@@ -821,14 +821,14 @@ Create `src/main.rs`:
 ```rust
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use codex_loop::{config::LoopConfig, runner::run_loop};
+use loopsmith::{config::LoopConfig, runner::run_loop};
 use std::{
     path::PathBuf,
     process::Command,
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "codex-loop")]
+#[command(name = "loopsmith")]
 #[command(about = "Run auditable iterative repair loops with Codex CLI")]
 struct Cli {
     #[command(subcommand)]
@@ -1002,7 +1002,7 @@ git commit -m "feat: run codex review repair loop"
 
 ## Execution Options
 
-Plan complete and saved to `docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md`. Two execution options:
+Plan complete and saved to `docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md`. Two execution options:
 
 1. Subagent-Driven (recommended): dispatch a fresh subagent per task, review between tasks, fast iteration.
 2. Inline Execution: execute tasks in this session using executing-plans, batch execution with checkpoints.
