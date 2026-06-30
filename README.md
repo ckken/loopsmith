@@ -2,7 +2,7 @@
 
 `codex-loop` 是一个面向 Codex CLI 的本地迭代修复工具规划仓库，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
 
-当前实现方向是 **Rust 单二进制 CLI**。本仓库目前只包含项目说明和实施计划，运行时代码尚未开始实现。
+当前实现方向是 **Rust 单二进制 CLI**。仓库已具备最小可运行闭环：`doctor` 能检测本机 Codex CLI，`run` 能复制当前项目到候选工作区、调用 `codex exec` 执行 review/repair、运行机械验证并写入 `record.json`。
 
 ## 目标
 
@@ -24,23 +24,33 @@
 - 默认只修改 `runs/<run-id>/` 下的候选工作区，不直接覆盖源文件。
 - 第一版不做 UI、不做 daemon、不做数据库、不做远程调度。
 
-## 计划命令
+## 使用方式
 
 ```bash
 codex-loop doctor
 codex-loop run --config examples/plaintext-loop.json
 ```
 
-开发阶段可使用：
+开发阶段也可以直接通过 Cargo 运行：
 
 ```bash
 cargo run -- doctor
 cargo run -- run --config examples/plaintext-loop.json
 ```
 
+如需安装到本机 PATH，可选执行：
+
+```bash
+cargo install --path . --force
+codex-loop doctor
+codex-loop run --config examples/plaintext-loop.json
+```
+
+`run` 默认会把候选项目复制到 `runs/<run-id>/iteration_N/workspace/`，源文件不会被直接覆盖。
+
 ## 配置示例
 
-计划中的最小配置文件如下：
+当前示例配置：
 
 ```json
 {
@@ -48,7 +58,7 @@ cargo run -- run --config examples/plaintext-loop.json
   "goal": "Make the README clearer and remove stale setup guidance.",
   "verify": "cargo test --quiet",
   "max_iterations": 3,
-  "model": "gpt-5.4-mini",
+  "model": "gpt-5.5",
   "sandbox": "workspace-write",
   "approval_policy": "never"
 }
@@ -62,16 +72,14 @@ cargo run -- run --config examples/plaintext-loop.json
 - `max_iterations`：最大迭代次数。
 - `model`：传给 `codex exec --model` 的模型。
 - `sandbox`：传给 `codex exec --sandbox` 的权限边界。
-- `approval_policy`：传给 `codex exec --ask-for-approval` 的审批策略。
+- `approval_policy`：传给 Codex 顶层 `-a` 参数的审批策略。
 
 ## 产物目录
 
-每次运行计划写入：
+每次运行写入：
 
 ```text
 runs/<run-id>/
-  config.json
-  summary.json
   iteration_1/
     workspace/
     review/
@@ -89,6 +97,8 @@ runs/<run-id>/
     record.json
 ```
 
+运行摘要会输出到终端；每轮的审计材料写入对应 `iteration_N/` 目录。
+
 `runs/` 已被 `.gitignore` 忽略，不应提交到仓库。
 
 ## 实施计划
@@ -97,7 +107,7 @@ runs/<run-id>/
 
 - [docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md](docs/superpowers/plans/2026-06-30-codex-loop-implementation-plan.md)
 
-计划中的 P0 模块：
+当前核心模块：
 
 - `config`：读取和校验配置。
 - `schema`：生成 review/repair JSON schema。
@@ -106,13 +116,12 @@ runs/<run-id>/
 - `record`：写入每轮审计记录。
 - `workspace`：创建候选工作区并复制目标文件。
 - `runner`：编排迭代和停止条件。
-- `main`：CLI 入口。
+- `main`：提供 CLI 入口。
 
 ## 当前状态
 
-- 私有仓库已初始化。
-- Rust 技术方案已确定。
-- README 和实施计划已完成。
-- 运行时代码尚未实现。
+- Rust CLI 骨架已实现。
+- 已用当前项目真实跑通一轮 `codex exec` review/repair loop。
+- 当前版本仍是 P0：候选修复只留在 `runs/<run-id>/`，不会自动 apply 回源文件。
 
-下一步建议从实施计划的 `Task 1: Rust Project Skeleton And Config` 开始。
+下一步建议：增加显式 `apply` 命令，把人工确认后的候选 patch 应用回源工作区。

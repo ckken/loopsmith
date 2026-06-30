@@ -88,7 +88,7 @@ pub struct LoopConfig {
 }
 
 fn default_max_iterations() -> usize { 3 }
-fn default_model() -> String { "gpt-5.4-mini".to_string() }
+fn default_model() -> String { "gpt-5.5".to_string() }
 fn default_sandbox() -> String { "workspace-write".to_string() }
 fn default_approval_policy() -> String { "never".to_string() }
 
@@ -160,7 +160,7 @@ mod tests {
             goal: "repair docs".to_string(),
             verify: "".to_string(),
             max_iterations: 3,
-            model: "gpt-5.4-mini".to_string(),
+            model: "gpt-5.5".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
         };
@@ -221,7 +221,7 @@ Create `examples/plaintext-loop.json`:
   "goal": "Make the README clearer and remove stale setup guidance.",
   "verify": "cargo test --quiet",
   "max_iterations": 3,
-  "model": "gpt-5.4-mini",
+  "model": "gpt-5.5",
   "sandbox": "workspace-write",
   "approval_policy": "never"
 }
@@ -333,13 +333,15 @@ use std::{
 
 pub fn codex_args(schema_file: &Path, answer_file: &Path, config: &LoopConfig) -> Vec<String> {
     vec![
+        "-a".to_string(),
+        config.approval_policy.clone(),
         "exec".to_string(),
         "--model".to_string(),
         config.model.clone(),
+        "--config".to_string(),
+        "model_reasoning_effort=\"low\"".to_string(),
         "--sandbox".to_string(),
         config.sandbox.clone(),
-        "--ask-for-approval".to_string(),
-        config.approval_policy.clone(),
         "--output-schema".to_string(),
         schema_file.display().to_string(),
         "--output-last-message".to_string(),
@@ -370,7 +372,10 @@ pub fn run_codex_json(prompt: &str, schema: &Value, run_dir: &Path, config: &Loo
         .spawn()
         .context("failed to spawn codex exec")?;
 
-    child.stdin.as_mut().unwrap().write_all(prompt.as_bytes())?;
+    {
+        let mut stdin = child.stdin.take().context("failed to open codex stdin")?;
+        stdin.write_all(prompt.as_bytes())?;
+    }
     let output = child.wait_with_output()?;
     fs::write(run_dir.join("stdout.txt"), &output.stdout)?;
     fs::write(run_dir.join("stderr.txt"), &output.stderr)?;
@@ -395,7 +400,7 @@ mod tests {
             goal: "repair docs".to_string(),
             verify: "cargo test".to_string(),
             max_iterations: 3,
-            model: "gpt-5.4-mini".to_string(),
+            model: "gpt-5.5".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
         }
@@ -405,11 +410,12 @@ mod tests {
     fn codex_args_include_schema_and_output_file() {
         let args = codex_args(&PathBuf::from("schema.json"), &PathBuf::from("answer.json"), &test_config());
 
-        assert_eq!(args[0], "exec");
+        assert_eq!(args[0], "-a");
+        assert_eq!(args[1], "never");
+        assert_eq!(args[2], "exec");
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
-        assert!(args.contains(&"--ask-for-approval".to_string()));
-        assert!(args.contains(&"never".to_string()));
+        assert!(args.contains(&"model_reasoning_effort=\"low\"".to_string()));
         assert!(args.contains(&"--output-schema".to_string()));
         assert!(args.contains(&"--output-last-message".to_string()));
         assert_eq!(args.last().unwrap(), "-");
@@ -756,7 +762,7 @@ mod tests {
             goal: "repair docs".to_string(),
             verify: "printf ok".to_string(),
             max_iterations: 3,
-            model: "gpt-5.4-mini".to_string(),
+            model: "gpt-5.5".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
         };
