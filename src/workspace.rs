@@ -78,4 +78,70 @@ mod tests {
         assert_eq!(fs::read_to_string(copied).unwrap(), "hello");
         assert!(!dir.path().join("runs/it1/workspace/target").exists());
     }
+
+    #[test]
+    fn copies_nested_artifact_into_iteration_workspace() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("docs/reference")).unwrap();
+        fs::write(dir.path().join("docs/reference/guide.md"), "nested").unwrap();
+
+        let copied = prepare_iteration_workspace(
+            dir.path(),
+            "docs/reference/guide.md",
+            &dir.path().join("runs/it1"),
+        )
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(copied).unwrap(), "nested");
+        assert!(
+            dir.path()
+                .join("runs/it1/workspace/docs/reference")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn skips_git_target_and_runs_directories() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        fs::create_dir_all(dir.path().join("target")).unwrap();
+        fs::create_dir_all(dir.path().join("runs")).unwrap();
+        fs::create_dir_all(dir.path().join("runs-installed-real")).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join(".git/config"), "ignored").unwrap();
+        fs::write(dir.path().join("target/cache"), "ignored").unwrap();
+        fs::write(dir.path().join("runs/record.json"), "ignored").unwrap();
+        fs::write(
+            dir.path().join("runs-installed-real/record.json"),
+            "ignored",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "pub fn ok() {}").unwrap();
+
+        prepare_iteration_workspace(dir.path(), "src/lib.rs", &dir.path().join("runs-new/it1"))
+            .unwrap();
+
+        let workspace = dir.path().join("runs-new/it1/workspace");
+        assert!(workspace.join("src/lib.rs").exists());
+        assert!(!workspace.join(".git").exists());
+        assert!(!workspace.join("target").exists());
+        assert!(!workspace.join("runs").exists());
+        assert!(!workspace.join("runs-installed-real").exists());
+    }
+
+    #[test]
+    fn errors_when_artifact_is_missing_after_copy() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+
+        let err = prepare_iteration_workspace(
+            dir.path(),
+            "docs/missing.md",
+            &dir.path().join("runs/it1"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("artifact docs/missing.md was not copied"));
+    }
 }

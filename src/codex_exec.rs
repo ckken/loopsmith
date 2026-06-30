@@ -100,11 +100,13 @@ mod tests {
         assert_eq!(args[0], "-a");
         assert_eq!(args[1], "never");
         assert_eq!(args[2], "exec");
+        assert_eq!(&args[0..3], ["-a", "never", "exec"]);
         assert!(args.contains(&"model_reasoning_effort=\"low\"".to_string()));
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
         assert!(args.contains(&"--output-schema".to_string()));
         assert!(args.contains(&"--output-last-message".to_string()));
+        assert!(!args.contains(&"--ask-for-approval".to_string()));
         assert_eq!(args.last().unwrap(), "-");
     }
 }

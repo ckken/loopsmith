@@ -47,4 +47,30 @@ mod tests {
         write_record(&record, &path).unwrap();
         assert!(path.exists());
     }
+
+    #[test]
+    fn write_record_preserves_auditable_fields() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("record.json");
+        let record = IterationRecord {
+            iteration: 2,
+            review: json!({"findings": [{"severity": "p0"}]}),
+            repair: json!({"changes_made": ["updated README"]}),
+            validation: VerifyResult {
+                passed: false,
+                returncode: 1,
+                stdout: "stdout delta".to_string(),
+                stderr: String::new(),
+            },
+            remaining_delta: vec!["stdout delta".to_string()],
+        };
+
+        write_record(&record, &path).unwrap();
+        let saved: IterationRecord =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+
+        assert_eq!(saved.iteration, 2);
+        assert!(!saved.validation.passed);
+        assert_eq!(saved.remaining_delta, vec!["stdout delta"]);
+    }
 }

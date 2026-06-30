@@ -72,6 +72,18 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn valid_config() -> LoopConfig {
+        LoopConfig {
+            artifact: "README.md".to_string(),
+            goal: "repair docs".to_string(),
+            verify: "cargo test".to_string(),
+            max_iterations: 3,
+            model: "gpt-5.5".to_string(),
+            sandbox: "workspace-write".to_string(),
+            approval_policy: "never".to_string(),
+        }
+    }
+
     #[test]
     fn loads_minimal_loop_config_with_defaults() {
         let dir = tempdir().unwrap();
@@ -99,16 +111,88 @@ mod tests {
     #[test]
     fn rejects_missing_verify() {
         let config = LoopConfig {
-            artifact: "README.md".to_string(),
-            goal: "repair docs".to_string(),
             verify: "".to_string(),
-            max_iterations: 3,
-            model: "gpt-5.5".to_string(),
-            sandbox: "workspace-write".to_string(),
-            approval_policy: "never".to_string(),
+            ..valid_config()
         };
 
         let err = config.validate().unwrap_err().to_string();
         assert!(err.contains("verify"));
+    }
+
+    #[test]
+    fn rejects_missing_artifact() {
+        let config = LoopConfig {
+            artifact: " ".to_string(),
+            ..valid_config()
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("artifact"));
+    }
+
+    #[test]
+    fn rejects_missing_goal() {
+        let config = LoopConfig {
+            goal: "\t".to_string(),
+            ..valid_config()
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("goal"));
+    }
+
+    #[test]
+    fn rejects_zero_max_iterations() {
+        let config = LoopConfig {
+            max_iterations: 0,
+            ..valid_config()
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("max_iterations"));
+    }
+
+    #[test]
+    fn rejects_unsupported_sandbox() {
+        let config = LoopConfig {
+            sandbox: "full-auto".to_string(),
+            ..valid_config()
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("unsupported sandbox"));
+    }
+
+    #[test]
+    fn rejects_unsupported_approval_policy() {
+        let config = LoopConfig {
+            approval_policy: "ask-for-approval".to_string(),
+            ..valid_config()
+        };
+
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("unsupported approval_policy"));
+    }
+
+    #[test]
+    fn from_path_reports_missing_file() {
+        let dir = tempdir().unwrap();
+
+        let err = LoopConfig::from_path(dir.path().join("missing.json"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("failed to read config"));
+    }
+
+    #[test]
+    fn from_path_reports_invalid_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("loop.json");
+        fs::write(&path, "{not-json").unwrap();
+
+        let err = LoopConfig::from_path(&path).unwrap_err().to_string();
+
+        assert!(err.contains("failed to parse loop config JSON"));
     }
 }

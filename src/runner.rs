@@ -188,6 +188,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
 
     struct FakePhaseExecutor;
@@ -221,6 +222,55 @@ mod tests {
         }
     }
 
+    struct RecordingPhaseExecutor {
+        seen_deltas: Arc<Mutex<Vec<Vec<String>>>>,
+    }
+
+    impl PhaseExecutor for RecordingPhaseExecutor {
+        fn review(
+            &self,
+            _config: &LoopConfig,
+            _artifact_text: &str,
+            _run_dir: &Path,
+        ) -> Result<Value> {
+            Ok(json!({"findings": []}))
+        }
+
+        fn repair(
+            &self,
+            config: &LoopConfig,
+            editable_path: &Path,
+            _findings: &Value,
+            remaining_delta: &[String],
+            iteration: usize,
+            _run_dir: &Path,
+        ) -> Result<Value> {
+            self.seen_deltas
+                .lock()
+                .unwrap()
+                .push(remaining_delta.to_vec());
+            Ok(json!({
+                "artifact": config.artifact,
+                "iteration": iteration,
+                "changes_made": [],
+                "unresolved_items": [],
+                "updated_artifact_path": editable_path
+            }))
+        }
+    }
+
+    fn test_config(verify: &str, max_iterations: usize) -> LoopConfig {
+        LoopConfig {
+            artifact: "README.md".to_string(),
+            goal: "repair docs".to_string(),
+            verify: verify.to_string(),
+            max_iterations,
+            model: "gpt-5.5".to_string(),
+            sandbox: "workspace-write".to_string(),
+            approval_policy: "never".to_string(),
+        }
+    }
+
     #[test]
     fn stops_when_validation_passes() {
         assert!(should_stop(1, 3, true, &["x".to_string()]));
@@ -240,15 +290,7 @@ mod tests {
     fn dry_run_writes_record() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("README.md"), "hello").unwrap();
-        let config = LoopConfig {
-            artifact: "README.md".to_string(),
-            goal: "repair docs".to_string(),
-            verify: "printf ok".to_string(),
-            max_iterations: 3,
-            model: "gpt-5.5".to_string(),
-            sandbox: "workspace-write".to_string(),
-            approval_policy: "never".to_string(),
-        };
+        let config = test_config("printf ok", 3);
 
         let summary = run_loop_with_executor(
             &config,
@@ -260,5 +302,78 @@ mod tests {
 
         assert!(summary.passed);
         assert!(summary.final_record_path.unwrap().exists());
+    }
+
+    #[test]
+    fn failed_verification_writes_remaining_delta() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let config = test_config("printf failure-details; exit 7", 1);
+
+        let summary = run_loop_with_executor(
+            &config,
+            dir.path(),
+            &dir.path().join("runs"),
+            &FakePhaseExecutor,
+        )
+        .unwrap();
+        let record_path = summary.final_record_path.unwrap();
+        let record: IterationRecord =
+            serde_json::from_str(&fs::read_to_string(record_path).unwrap()).unwrap();
+
+        assert!(!summary.passed);
+        assert_eq!(summary.iterations, 1);
+        assert!(!record.validation.passed);
+        assert_eq!(record.validation.returncode, 7);
+        assert!(record.remaining_delta[0].contains("failure-details"));
+    }
+
+    #[test]
+    fn failed_verification_runs_until_max_iterations() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let config = test_config("printf still-bad; exit 7", 2);
+
+        let summary = run_loop_with_executor(
+            &config,
+            dir.path(),
+            &dir.path().join("runs"),
+            &FakePhaseExecutor,
+        )
+        .unwrap();
+        let final_record = summary.final_record_path.unwrap();
+        let run_root = final_record
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+
+        assert!(!summary.passed);
+        assert_eq!(summary.iterations, 2);
+        assert!(run_root.join("iteration_1/record.json").exists());
+        assert!(run_root.join("iteration_2/record.json").exists());
+    }
+
+    #[test]
+    fn second_iteration_receives_previous_delta() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let config = test_config("printf first-failure; exit 7", 2);
+        let seen_deltas = Arc::new(Mutex::new(Vec::new()));
+        let executor = RecordingPhaseExecutor {
+            seen_deltas: Arc::clone(&seen_deltas),
+        };
+
+        let summary =
+            run_loop_with_executor(&config, dir.path(), &dir.path().join("runs"), &executor)
+                .unwrap();
+        let seen_deltas = seen_deltas.lock().unwrap();
+
+        assert!(!summary.passed);
+        assert_eq!(summary.iterations, 2);
+        assert_eq!(seen_deltas.len(), 2);
+        assert!(seen_deltas[0].is_empty());
+        assert!(seen_deltas[1][0].contains("first-failure"));
     }
 }
