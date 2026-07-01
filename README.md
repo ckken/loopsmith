@@ -8,6 +8,14 @@
   <em>面向 Codex 的自动化修复编排工具。</em>
 </p>
 
+<p align="center">
+  <a href="https://ckken.github.io/loopsmith/">官网</a>
+  ·
+  <a href="https://github.com/ckken/loopsmith/releases/tag/v0.3.1">下载 v0.3.1</a>
+  ·
+  <a href="docs/loopsmith-best-practices.md">最佳实践</a>
+</p>
+
 **Loopsmith：用可审计的 review、repair、verify 循环，自动编排 Codex 模型调用、候选 workspace、验证命令、迭代状态和审计记录，把 AI 生成的候选修复推进到可验证结果。**
 
 `loopsmith` 是一个面向 Codex CLI 的本地自动化修复编排工具，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
