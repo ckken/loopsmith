@@ -35,6 +35,13 @@ jobs:
         with:
           enablement: true
 
+      - name: Install ImageMagick
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
       - name: Prepare static site
         shell: bash
         run: |
@@ -49,8 +56,12 @@ jobs:
           elif command -v convert >/dev/null 2>&1; then
             convert assets/logo.png -trim +repage -resize 160x160 -strip .pages/assets/logo.png
           else
-            cp assets/logo.png .pages/assets/logo.png
+            echo "ImageMagick is required to prepare the web logo." >&2
+            exit 1
           fi
+
+          file .pages/assets/logo.png
+          wc -c .pages/assets/logo.png
 
           python3 - <<'PY'
           from pathlib import Path
