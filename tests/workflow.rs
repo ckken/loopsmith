@@ -298,11 +298,15 @@ fn workflow_apply_run_executes_pre_and_post_apply_hooks() {
 
     assert!(outcome.applied);
     assert_eq!(
-        fs::read_to_string(source.join("pre_apply.txt")).unwrap(),
+        fs::read_to_string(source.join("pre_apply.txt"))
+            .unwrap()
+            .trim(),
         "pre"
     );
     assert_eq!(
-        fs::read_to_string(source.join("post_apply.txt")).unwrap(),
+        fs::read_to_string(source.join("post_apply.txt"))
+            .unwrap()
+            .trim(),
         "post"
     );
     assert!(
