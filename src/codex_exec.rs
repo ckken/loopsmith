@@ -92,6 +92,9 @@ mod tests {
             model_reasoning_effort: "high".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
+            profile: None,
+            review_agents: Vec::new(),
+            hooks: crate::hooks::HooksConfig::default(),
         }
     }
 

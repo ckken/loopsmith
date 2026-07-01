@@ -1,6 +1,7 @@
 use crate::{
     codex_exec::run_codex_json,
-    config::LoopConfig,
+    config::{LoopConfig, ReviewAgentConfig},
+    hooks::{run_hook, run_required_hook},
     record::{IterationRecord, write_record},
     run_state::{
         RunManifest, RunStatus, artifact_hash, write_manifest_and_index, write_run_summary,
@@ -11,7 +12,7 @@ use crate::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -58,7 +59,13 @@ pub fn run_loop(config: &LoopConfig, source_root: &Path, runs_dir: &Path) -> Res
 }
 
 pub trait PhaseExecutor {
-    fn review(&self, config: &LoopConfig, artifact_text: &str, run_dir: &Path) -> Result<Value>;
+    fn review(
+        &self,
+        config: &LoopConfig,
+        agent: &ReviewAgentConfig,
+        artifact_text: &str,
+        run_dir: &Path,
+    ) -> Result<Value>;
 
     fn repair(
         &self,
@@ -74,10 +81,16 @@ pub trait PhaseExecutor {
 pub struct CodexPhaseExecutor;
 
 impl PhaseExecutor for CodexPhaseExecutor {
-    fn review(&self, config: &LoopConfig, artifact_text: &str, run_dir: &Path) -> Result<Value> {
-        let phase_config = config.review_phase_config();
+    fn review(
+        &self,
+        config: &LoopConfig,
+        agent: &ReviewAgentConfig,
+        artifact_text: &str,
+        run_dir: &Path,
+    ) -> Result<Value> {
+        let phase_config = config.review_phase_config_for(agent);
         run_codex_json(
-            &review_prompt(config, artifact_text),
+            &review_prompt(config, agent, artifact_text),
             &review_schema(),
             run_dir,
             &phase_config,
@@ -103,10 +116,14 @@ impl PhaseExecutor for CodexPhaseExecutor {
     }
 }
 
-fn review_prompt(config: &LoopConfig, artifact_text: &str) -> String {
+fn review_prompt(config: &LoopConfig, agent: &ReviewAgentConfig, artifact_text: &str) -> String {
+    let focus = agent
+        .focus
+        .as_deref()
+        .unwrap_or("review correctness, tests, docs, and safety");
     format!(
-        "You are reviewing an artifact before repair.\nArtifact: {}\nGoal: {}\nDo not edit files. Return concise structured findings.\n\n{}",
-        config.artifact, config.goal, artifact_text
+        "You are a read-only review agent.\nAgent: {}\nFocus: {}\nArtifact: {}\nGoal: {}\nDo not edit files. Return concise structured findings.\n\n{}",
+        agent.id, focus, config.artifact, config.goal, artifact_text
     )
 }
 
@@ -151,8 +168,13 @@ pub fn run_loop_with_executor(
         final_record_path: None,
         final_artifact_path: None,
         summary_path: Some(format!("{run_id}/summary.md")),
+        hooks: config.hooks.clone(),
     };
     write_manifest_and_index(&manifest, runs_dir)?;
+
+    if let Some(command) = &config.hooks.pre_run {
+        run_required_hook("pre_run", command, source_root, &root.join("hooks/pre_run"))?;
+    }
 
     let mut workspace_source = source_root.to_path_buf();
     let mut remaining_delta = Vec::new();
@@ -167,7 +189,7 @@ pub fn run_loop_with_executor(
         let workspace_root = iteration_dir.join("workspace");
         let artifact_text = fs::read_to_string(&copied)?;
 
-        let review = executor.review(config, &artifact_text, &iteration_dir.join("review"))?;
+        let review = run_review_agents(config, &artifact_text, &iteration_dir, executor)?;
         let repair = executor.repair(
             config,
             &copied,
@@ -176,7 +198,7 @@ pub fn run_loop_with_executor(
             iteration,
             &iteration_dir.join("repair"),
         )?;
-        let validation = run_verify(&config.verify, &workspace_root)?;
+        let mut validation = run_verify(&config.verify, &workspace_root)?;
         remaining_delta = if validation.passed {
             vec![]
         } else {
@@ -186,6 +208,26 @@ pub fn run_loop_with_executor(
                 validation.stderr.clone()
             }]
         };
+        if let Some(command) = &config.hooks.post_iteration {
+            let hook_result = run_hook(
+                "post_iteration",
+                command,
+                &workspace_root,
+                &iteration_dir.join("hooks/post_iteration"),
+            )?;
+            if !hook_result.passed {
+                let delta = hook_delta("post_iteration", &hook_result);
+                validation.passed = false;
+                validation.returncode = hook_result.returncode;
+                if validation.stderr.trim().is_empty() {
+                    validation.stderr = delta.clone();
+                } else {
+                    validation.stderr.push('\n');
+                    validation.stderr.push_str(&delta);
+                }
+                remaining_delta.push(delta);
+            }
+        }
 
         let record = IterationRecord {
             iteration,
@@ -223,6 +265,16 @@ pub fn run_loop_with_executor(
         if manifest.status != RunStatus::Running {
             manifest.finished_at_unix = Some(unix_seconds());
         }
+        if manifest.status == RunStatus::Failed {
+            if let Some(command) = &config.hooks.on_failure {
+                let _ = run_hook(
+                    "on_failure",
+                    command,
+                    source_root,
+                    &root.join("hooks/on_failure"),
+                );
+            }
+        }
         write_manifest_and_index(&manifest, runs_dir)?;
         summary_path = Some(write_run_summary(runs_dir, &manifest)?);
 
@@ -250,6 +302,61 @@ pub fn run_loop_with_executor(
     })
 }
 
+fn run_review_agents(
+    config: &LoopConfig,
+    artifact_text: &str,
+    iteration_dir: &Path,
+    executor: &dyn PhaseExecutor,
+) -> Result<Value> {
+    let mut agents = Vec::new();
+    let mut findings = Vec::new();
+    for agent in config.effective_review_agents() {
+        let run_dir = iteration_dir.join("review").join(&agent.id);
+        let answer = executor.review(config, &agent, artifact_text, &run_dir)?;
+        fs::create_dir_all(&run_dir)?;
+        fs::write(
+            run_dir.join("answer.json"),
+            serde_json::to_string_pretty(&answer)?,
+        )?;
+
+        if let Some(items) = answer.get("findings").and_then(Value::as_array) {
+            for item in items {
+                findings.push(json!({
+                    "agent": agent.id,
+                    "finding": item
+                }));
+            }
+        }
+        agents.push(json!({
+            "id": agent.id,
+            "model": agent.model,
+            "focus": agent.focus,
+            "answer": answer
+        }));
+    }
+
+    Ok(json!({
+        "agents": agents,
+        "findings": findings
+    }))
+}
+
+fn hook_delta(event: &str, result: &crate::verify::VerifyResult) -> String {
+    let output = if result.stderr.trim().is_empty() {
+        result.stdout.trim()
+    } else {
+        result.stderr.trim()
+    };
+    if output.is_empty() {
+        format!("{event} hook failed with status {}", result.returncode)
+    } else {
+        format!(
+            "{event} hook failed with status {}: {output}",
+            result.returncode
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +371,7 @@ mod tests {
         fn review(
             &self,
             _config: &LoopConfig,
+            _agent: &ReviewAgentConfig,
             _artifact_text: &str,
             _run_dir: &Path,
         ) -> Result<Value> {
@@ -297,6 +405,7 @@ mod tests {
         fn review(
             &self,
             _config: &LoopConfig,
+            _agent: &ReviewAgentConfig,
             _artifact_text: &str,
             _run_dir: &Path,
         ) -> Result<Value> {
@@ -338,6 +447,9 @@ mod tests {
             model_reasoning_effort: "low".to_string(),
             sandbox: "workspace-write".to_string(),
             approval_policy: "never".to_string(),
+            profile: None,
+            review_agents: Vec::new(),
+            hooks: crate::hooks::HooksConfig::default(),
         }
     }
 
@@ -485,5 +597,146 @@ mod tests {
         assert_eq!(seen_deltas.len(), 2);
         assert!(seen_deltas[0].is_empty());
         assert!(seen_deltas[1][0].contains("first-failure"));
+    }
+
+    struct RecordingReviewExecutor {
+        seen_agents: Arc<Mutex<Vec<String>>>,
+        repair_reviews: Arc<Mutex<Vec<Value>>>,
+    }
+
+    impl PhaseExecutor for RecordingReviewExecutor {
+        fn review(
+            &self,
+            _config: &LoopConfig,
+            agent: &ReviewAgentConfig,
+            _artifact_text: &str,
+            _run_dir: &Path,
+        ) -> Result<Value> {
+            self.seen_agents.lock().unwrap().push(agent.id.clone());
+            Ok(json!({
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "message": format!("{} finding", agent.id)
+                    }
+                ]
+            }))
+        }
+
+        fn repair(
+            &self,
+            config: &LoopConfig,
+            editable_path: &Path,
+            findings: &Value,
+            _remaining_delta: &[String],
+            iteration: usize,
+            _run_dir: &Path,
+        ) -> Result<Value> {
+            self.repair_reviews.lock().unwrap().push(findings.clone());
+            Ok(json!({
+                "artifact": config.artifact,
+                "iteration": iteration,
+                "changes_made": [],
+                "unresolved_items": [],
+                "updated_artifact_path": editable_path
+            }))
+        }
+    }
+
+    #[test]
+    fn multi_review_profile_runs_default_agents_and_merges_findings() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let mut config = test_config(&passing_verify("ok"), 1);
+        config.profile = Some("multi-review".to_string());
+        let seen_agents = Arc::new(Mutex::new(Vec::new()));
+        let repair_reviews = Arc::new(Mutex::new(Vec::new()));
+        let executor = RecordingReviewExecutor {
+            seen_agents: Arc::clone(&seen_agents),
+            repair_reviews: Arc::clone(&repair_reviews),
+        };
+
+        let summary =
+            run_loop_with_executor(&config, dir.path(), &dir.path().join("runs"), &executor)
+                .unwrap();
+
+        assert!(summary.passed);
+        assert_eq!(
+            *seen_agents.lock().unwrap(),
+            vec![
+                "correctness".to_string(),
+                "tests".to_string(),
+                "docs".to_string()
+            ]
+        );
+        let merged = repair_reviews.lock().unwrap()[0].clone();
+        assert_eq!(merged["agents"].as_array().unwrap().len(), 3);
+        assert_eq!(merged["findings"].as_array().unwrap().len(), 3);
+        assert!(
+            summary
+                .run_dir
+                .join("iteration_1/review/correctness/answer.json")
+                .exists()
+        );
+        assert!(
+            summary
+                .run_dir
+                .join("iteration_1/review/tests/answer.json")
+                .exists()
+        );
+        assert!(
+            summary
+                .run_dir
+                .join("iteration_1/review/docs/answer.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn pre_run_hook_writes_audit_before_review() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let mut config = test_config(&passing_verify("ok"), 1);
+        config.hooks.pre_run = Some(passing_verify("pre-run"));
+
+        let summary = run_loop_with_executor(
+            &config,
+            dir.path(),
+            &dir.path().join("runs"),
+            &FakePhaseExecutor,
+        )
+        .unwrap();
+
+        assert!(summary.run_dir.join("hooks/pre_run/command.txt").exists());
+        assert!(summary.run_dir.join("hooks/pre_run/result.json").exists());
+    }
+
+    #[test]
+    fn failed_post_iteration_hook_keeps_run_failed_and_records_delta() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        let mut config = test_config(&passing_verify("ok"), 1);
+        config.hooks.post_iteration = Some(failing_verify("hook-failed"));
+
+        let summary = run_loop_with_executor(
+            &config,
+            dir.path(),
+            &dir.path().join("runs"),
+            &FakePhaseExecutor,
+        )
+        .unwrap();
+        let record: IterationRecord =
+            serde_json::from_str(&fs::read_to_string(summary.final_record_path.unwrap()).unwrap())
+                .unwrap();
+
+        assert!(!summary.passed);
+        assert!(!record.validation.passed);
+        assert!(record.remaining_delta[0].contains("post_iteration hook failed"));
+        assert!(
+            summary
+                .run_dir
+                .join("iteration_1/hooks/post_iteration/result.json")
+                .exists()
+        );
     }
 }

@@ -1,5 +1,6 @@
 pub mod codex_exec;
 pub mod config;
+pub mod hooks;
 pub mod record;
 pub mod run_state;
 pub mod runner;

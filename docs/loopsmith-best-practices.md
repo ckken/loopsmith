@@ -14,6 +14,8 @@
 - 先让验证命令定义成功，再让模型尝试修复。
 - 所有模型输出都写入审计记录，不以口头结论替代 `record.json`。
 - 默认只修改 `runs/<run-id>/` 下的候选工作区，不直接覆盖源文件。
+- 多 agent 只用于只读 review；repair 阶段保持单 writer。
+- hooks 使用 Loopsmith 项目配置，不依赖 Codex 全局 hook。
 - 自动测试只使用 fake executor，不在 CI 或单元测试中真实调用 `codex exec`。
 
 ## 适合的任务
@@ -47,7 +49,14 @@
   "repair_model": "gpt-5.4-mini",
   "model_reasoning_effort": "low",
   "sandbox": "workspace-write",
-  "approval_policy": "never"
+  "approval_policy": "never",
+  "profile": "multi-review",
+  "hooks": {
+    "pre_run": "git diff --check",
+    "post_iteration": "cargo test --quiet",
+    "pre_apply": "cargo fmt --check",
+    "post_apply": "cargo test --locked --all-targets"
+  }
 }
 ```
 
@@ -57,8 +66,39 @@
 - `goal`：写清楚“要改什么”和“不要改什么”，避免模型扩大范围。
 - `verify`：必须是可重复执行的本地命令，且失败时能输出明确错误。
 - `max_iterations`：默认 3 足够。超过 3 轮仍失败，通常应该人工介入。
+- `profile`：优先从 `default`、`quick-fix`、`test-repair`、`docs-repair`、`multi-review` 中选择。
+- `review_agents`：只有需要明确拆分 review 角色时再手写；否则先用 profile。
+- `hooks`：用于把本地质量门禁接进 loop 生命周期，例如 `git diff --check`、`cargo fmt --check`、完整测试。
 - `sandbox`：默认使用 `workspace-write`，只有明确需要时才放宽。
 - `approval_policy`：自动 loop 建议使用 `never`，避免执行中途等待人工确认。
+
+## Profile 与 hooks
+
+查看内置 profile：
+
+```bash
+loopsmith profiles
+```
+
+推荐使用方式：
+
+| Profile | 触发方式 | 适用场景 |
+| --- | --- | --- |
+| `default` | 单 reviewer | 普通小修 |
+| `quick-fix` | 快速单 reviewer | 低风险格式、文案、配置修复 |
+| `test-repair` | 测试导向 reviewer | 失败测试、缺失测试、验证输出修复 |
+| `docs-repair` | 文档导向 reviewer | README、迁移说明、使用示例 |
+| `multi-review` | `correctness` / `tests` / `docs` 三个只读 reviewer | 高风险或需要更强审计的任务 |
+
+hooks 建议只做本地、可重复、无交互的命令：
+
+- `pre_run`：启动前门禁，例如 `git diff --check`。
+- `post_iteration`：每轮候选 workspace 验证，例如 `cargo test --quiet`。
+- `pre_apply`：写回源文件前门禁，例如 `cargo fmt --check`。
+- `post_apply`：写回后完整验收，例如 `cargo test --locked --all-targets`。
+- `on_failure`：失败通知或报告生成。
+
+hook 每次执行都会写入 `command.txt`、`stdout.txt`、`stderr.txt` 和 `result.json`，便于复盘。
 
 ## 模型选择
 
@@ -159,19 +199,40 @@ terraform apply
 
 ## Subagent 策略
 
-当前阶段不建议让多个 subagent 同时修改文件。更稳的路线是先做阶段角色化：
+当前阶段不建议让多个 subagent 同时修改文件。Loopsmith 已支持“多只读 review agent + 单 writer repair”的触发方式：
 
-- review 阶段可以未来扩展为多个只读 agent，例如 correctness、tests、docs。
+```json
+{
+  "profile": "multi-review"
+}
+```
+
+或者显式配置：
+
+```json
+{
+  "review_agents": [
+    { "id": "correctness", "model": "gpt-5.4", "focus": "find behavior bugs" },
+    { "id": "tests", "model": "gpt-5.4-mini", "focus": "find missing tests" },
+    { "id": "docs", "model": "gpt-5.4-mini", "focus": "find stale docs" }
+  ]
+}
+```
+
+约束：
+
+- review 阶段可以多个只读 agent，例如 correctness、tests、docs。
 - repair 阶段保持单 writer，避免多个 agent 写同一份候选 workspace。
 - 每个 agent 都必须写入独立审计记录，包括模型、prompt、answer、耗时和失败原因。
 
-推荐演进顺序：
+审计路径：
 
-1. 阶段模型配置。
-2. timeout / retry / reasoning effort 配置。
-3. record 中记录实际模型和参数。
-4. 多 review agent，只读并合并 findings。
-5. 单 repair agent 消费合并后的 findings。
+```text
+runs/<run-id>/iteration_1/review/correctness/
+runs/<run-id>/iteration_1/review/tests/
+runs/<run-id>/iteration_1/review/docs/
+runs/<run-id>/iteration_1/repair/
+```
 
 ## 测试策略
 
@@ -211,7 +272,7 @@ terraform apply
 
 ## 推荐落地路线
 
-P0 已具备：
+当前已具备：
 
 - Rust 单二进制 CLI。
 - 配置读取和校验。
@@ -219,16 +280,18 @@ P0 已具备：
 - 候选 workspace 隔离。
 - run manifest / index / summary。
 - `inspect` / `diff` / `apply` 最小验收链路。
+- workflow profile。
+- Loopsmith lifecycle hooks。
+- 多只读 review agent + 单 writer repair。
 - fake executor 测试覆盖。
 
 下一步建议：
 
 1. 增加 resume，让失败或中断的 run 可以从最近一轮继续。
-2. 增加 workflow profile，把小修、测试补齐、文档修复、重构试点拆成不同默认策略。
+2. 增加多 artifact 支持，把小型跨文件改动纳入同一个 run。
 3. 在 `record.json` 中记录实际使用模型、reasoning effort 和耗时。
 4. 增加 per-phase timeout / retry。
-5. 支持多 review agent，但 repair 保持单 writer。
-6. 增加更完整的 diff 展示和人工验收报告。
+5. 增加更完整的 unified diff 展示和人工验收报告。
 
 判断是否可以进入真实项目试点的标准：
 

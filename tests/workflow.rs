@@ -1,4 +1,5 @@
 use loopsmith::{
+    hooks::HooksConfig,
     record::{IterationRecord, write_record},
     run_state::{
         RunManifest, RunStatus, apply_run, artifact_hash, diff_run, inspect_run, latest_run_id,
@@ -80,6 +81,7 @@ fn create_fake_run(
         final_record_path: Some(format!("{run_id}/iteration_1/record.json")),
         final_artifact_path: Some(format!("{run_id}/iteration_1/workspace/README.md")),
         summary_path: Some(format!("{run_id}/summary.md")),
+        hooks: HooksConfig::default(),
     };
     write_manifest_and_index(&manifest, runs_dir).unwrap();
     manifest
@@ -263,4 +265,52 @@ fn workflow_apply_run_verify_after_apply_runs_manifest_verify_command() {
 
     assert!(outcome.applied);
     assert!(outcome.verification.unwrap().passed);
+}
+
+fn write_marker_command(name: &str, text: &str) -> String {
+    if cfg!(target_os = "windows") {
+        format!("echo {text}> {name}")
+    } else {
+        format!("printf {text} > {name}")
+    }
+}
+
+#[test]
+fn workflow_apply_run_executes_pre_and_post_apply_hooks() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source");
+    let runs = dir.path().join("runs");
+    fs::create_dir_all(&source).unwrap();
+    let mut manifest = create_fake_run(
+        &source,
+        &runs,
+        "run-1",
+        "new\n",
+        &verify_readme_contains("new"),
+        RunStatus::Passed,
+        1,
+    );
+    manifest.hooks.pre_apply = Some(write_marker_command("pre_apply.txt", "pre"));
+    manifest.hooks.post_apply = Some(write_marker_command("post_apply.txt", "post"));
+    write_manifest_and_index(&manifest, &runs).unwrap();
+
+    let outcome = apply_run(&source, &runs, Some("run-1"), Some(1), false, false, true).unwrap();
+
+    assert!(outcome.applied);
+    assert_eq!(
+        fs::read_to_string(source.join("pre_apply.txt")).unwrap(),
+        "pre"
+    );
+    assert_eq!(
+        fs::read_to_string(source.join("post_apply.txt")).unwrap(),
+        "post"
+    );
+    assert!(
+        runs.join("run-1/hooks/apply/pre_apply/result.json")
+            .exists()
+    );
+    assert!(
+        runs.join("run-1/hooks/apply/post_apply/result.json")
+            .exists()
+    );
 }

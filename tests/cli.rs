@@ -14,6 +14,7 @@ fn cli_help_lists_available_commands() {
     assert!(stdout.contains("inspect"));
     assert!(stdout.contains("diff"));
     assert!(stdout.contains("apply"));
+    assert!(stdout.contains("profiles"));
 }
 
 #[test]
@@ -44,4 +45,20 @@ fn cli_inspect_with_missing_run_fails() {
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
 
     assert!(stderr.contains("missing-run"));
+}
+
+#[test]
+fn cli_profiles_lists_builtin_profiles() {
+    let assert = Command::cargo_bin("loopsmith")
+        .unwrap()
+        .arg("profiles")
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("default"));
+    assert!(stdout.contains("quick-fix"));
+    assert!(stdout.contains("test-repair"));
+    assert!(stdout.contains("docs-repair"));
+    assert!(stdout.contains("multi-review"));
 }

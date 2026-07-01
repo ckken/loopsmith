@@ -1,0 +1,18 @@
+{
+  "artifact": "README.md",
+  "goal": "Make the README clearer, keep installation commands accurate, and do not change source code behavior.",
+  "verify": "cargo test --quiet",
+  "max_iterations": 3,
+  "model": "gpt-5.5",
+  "repair_model": "gpt-5.4-mini",
+  "model_reasoning_effort": "low",
+  "sandbox": "workspace-write",
+  "approval_policy": "never",
+  "profile": "multi-review",
+  "hooks": {
+    "pre_run": "git diff --check",
+    "post_iteration": "cargo test --quiet",
+    "pre_apply": "cargo fmt --check",
+    "post_apply": "cargo test --locked --all-targets"
+  }
+}

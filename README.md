@@ -12,7 +12,7 @@
 
 `loopsmith` 是一个面向 Codex CLI 的本地自动化修复编排工具，目标是把 `codex exec` 包装成可审计、可验证、可复用的修复闭环。
 
-当前实现方向是 **Rust 单二进制 CLI**。仓库已具备最小可运行闭环：`doctor` 能检测本机 Codex CLI，`run` 能复制当前项目到候选工作区、调用 `codex exec` 执行 review/repair、运行机械验证并写入 `record.json`。
+当前实现方向是 **Rust 单二进制 CLI**。仓库已具备可试点的本地工作流闭环：`doctor` 能检测本机 Codex CLI，`run` 能复制当前项目到候选工作区、按 profile 触发一个或多个只读 review agent、调用单 writer repair、运行机械验证、执行 lifecycle hooks，并写入可审计记录。
 
 ## 目标
 
@@ -40,16 +40,16 @@
 
 ```bash
 gh auth login
-gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz'
-tar -xzf loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz
-sudo install -m 0755 loopsmith-v0.2.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.3.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
 loopsmith doctor
 ```
 
 从源码安装：
 
 ```bash
-cargo install --git https://github.com/ckken/loopsmith --tag v0.2.0
+cargo install --git https://github.com/ckken/loopsmith --tag v0.3.0
 loopsmith doctor
 ```
 
@@ -59,6 +59,7 @@ loopsmith doctor
 
 ```bash
 loopsmith doctor
+loopsmith profiles
 loopsmith run --config examples/plaintext-loop.json
 ```
 
@@ -77,6 +78,7 @@ loopsmith apply --verify
 命令说明：
 
 - `loopsmith run`：创建候选 workspace，执行 review / repair / verify 循环。
+- `loopsmith profiles`：列出内置 workflow profile。
 - `loopsmith inspect [RUN_ID]`：查看 run 状态、迭代记录、最终候选文件和 summary 路径；不传 `RUN_ID` 时读取最新 run。
 - `loopsmith diff [RUN_ID] --iteration N`：对比源文件和指定轮次候选文件。
 - `loopsmith apply [RUN_ID] --iteration N --dry-run`：只检查是否可以应用，不写源文件。
@@ -115,7 +117,14 @@ loopsmith run --config examples/plaintext-loop.json
   "repair_model": "gpt-5.4-mini",
   "model_reasoning_effort": "low",
   "sandbox": "workspace-write",
-  "approval_policy": "never"
+  "approval_policy": "never",
+  "profile": "multi-review",
+  "hooks": {
+    "pre_run": "git diff --check",
+    "post_iteration": "cargo test --quiet",
+    "pre_apply": "cargo fmt --check",
+    "post_apply": "cargo test --locked --all-targets"
+  }
 }
 ```
 
@@ -131,6 +140,17 @@ loopsmith run --config examples/plaintext-loop.json
 - `model_reasoning_effort`：传给 `codex exec --config model_reasoning_effort="..."` 的推理强度，当前支持 `low`、`medium`、`high`、`xhigh`。
 - `sandbox`：传给 `codex exec --sandbox` 的权限边界。
 - `approval_policy`：传给 Codex 顶层 `-a` 参数的审批策略。
+- `profile`：内置工作流策略；可选 `default`、`quick-fix`、`test-repair`、`docs-repair`、`multi-review`。
+- `review_agents`：可选，显式配置多个只读 review agent；配置后覆盖 profile 的默认 agent。
+- `hooks`：可选，配置 Loopsmith lifecycle hooks，包括 `pre_run`、`post_iteration`、`pre_apply`、`post_apply`、`on_failure`。
+
+内置 profile：
+
+```bash
+loopsmith profiles
+```
+
+多 review agent 示例见 [examples/multi-review-loop.json](examples/multi-review-loop.json)。`multi-review` 会触发 `correctness`、`tests`、`docs` 三个只读 reviewer，并把 findings 合并后交给单 writer repair。
 
 当前建议模型：
 
@@ -152,11 +172,14 @@ runs/<run-id>/
   iteration_1/
     workspace/
     review/
-      prompt.txt
-      schema.json
-      answer.json
-      stdout.txt
-      stderr.txt
+      correctness/
+        prompt.txt
+        schema.json
+        answer.json
+        stdout.txt
+        stderr.txt
+      tests/
+      docs/
     repair/
       prompt.txt
       schema.json
@@ -164,6 +187,18 @@ runs/<run-id>/
       stdout.txt
       stderr.txt
     record.json
+    hooks/
+      post_iteration/
+        command.txt
+        stdout.txt
+        stderr.txt
+        result.json
+  hooks/
+    pre_run/
+    on_failure/
+    apply/
+      pre_apply/
+      post_apply/
 runs/index.json
 ```
 
@@ -178,6 +213,7 @@ runs/index.json
 - [docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md](docs/superpowers/plans/2026-06-30-loopsmith-implementation-plan.md)
 - [docs/loopsmith-best-practices.md](docs/loopsmith-best-practices.md)
 - [docs/acceptance.md](docs/acceptance.md)
+- [docs/scorecard.md](docs/scorecard.md)
 - [docs/release.md](docs/release.md)
 
 当前核心模块：
@@ -189,14 +225,16 @@ runs/index.json
 - `record`：写入每轮审计记录。
 - `workspace`：创建候选工作区并复制目标文件。
 - `runner`：编排迭代和停止条件。
-- `run_state`：维护 run manifest、index、summary、inspect、diff 和 apply。
+- `hooks`：执行 Loopsmith lifecycle hooks 并写入审计文件。
+- `run_state`：维护 run manifest、index、summary、inspect、diff、apply 和 apply hooks。
 - `main`：提供 CLI 入口。
 
 ## 当前状态
 
 - Rust CLI 骨架已实现。
 - 已用当前项目真实跑通一轮 `codex exec` review/repair loop。
-- 已具备最小 vibecoding 工作流：`run` 生成候选修复，`inspect` 查看状态，`diff` 对比候选，`apply --dry-run` 做写回前检查，`apply --verify` 显式写回并重新验证。
+- 已具备可试点 vibecoding 工作流：`run` 生成候选修复，`inspect` 查看状态，`diff` 对比候选，`apply --dry-run` 做写回前检查，`apply --verify` 显式写回并重新验证。
+- 已支持 workflow profile、多个只读 review agent、单 writer repair，以及 `pre_run` / `post_iteration` / `pre_apply` / `post_apply` / `on_failure` hooks。
 - `apply` 默认校验源文件 hash，避免覆盖 run 开始后的人工修改。
 
-下一步建议：增加 resume、workflow profile 和多 review agent；repair 阶段仍保持单 writer。
+下一步建议：增加 resume、多 artifact 支持、更完整的 unified diff 和可分享验收报告。

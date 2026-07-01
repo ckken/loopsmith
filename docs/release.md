@@ -58,8 +58,8 @@ bash scripts/package-release.sh aarch64-apple-darwin
 4. 创建并推送 tag：
 
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 
 5. GitHub Actions 会自动构建并发布 GitHub Release。
@@ -67,8 +67,8 @@ bash scripts/package-release.sh aarch64-apple-darwin
 6. 验证 release：
 
    ```bash
-   gh release view v0.2.0 -R ckken/loopsmith
-   gh release download v0.2.0 -R ckken/loopsmith -D /tmp/loopsmith-release
+   gh release view v0.3.0 -R ckken/loopsmith
+   gh release download v0.3.0 -R ckken/loopsmith -D /tmp/loopsmith-release
    ```
 
 ## 安装预编译二进制
@@ -77,41 +77,41 @@ bash scripts/package-release.sh aarch64-apple-darwin
 
 ```bash
 gh auth login
-gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz'
-tar -xzf loopsmith-v0.2.0-aarch64-apple-darwin.tar.gz
-sudo install -m 0755 loopsmith-v0.2.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.3.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
 loopsmith doctor
 ```
 
 Linux x86_64：
 
 ```bash
-gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-x86_64-unknown-linux-gnu.tar.gz'
-tar -xzf loopsmith-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 0755 loopsmith-v0.2.0-x86_64-unknown-linux-gnu/loopsmith /usr/local/bin/loopsmith
+gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-x86_64-unknown-linux-gnu.tar.gz'
+tar -xzf loopsmith-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 loopsmith-v0.3.0-x86_64-unknown-linux-gnu/loopsmith /usr/local/bin/loopsmith
 ```
 
 macOS Intel：
 
 ```bash
-gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-x86_64-apple-darwin.tar.gz'
-tar -xzf loopsmith-v0.2.0-x86_64-apple-darwin.tar.gz
-sudo install -m 0755 loopsmith-v0.2.0-x86_64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-x86_64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.3.0-x86_64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.3.0-x86_64-apple-darwin/loopsmith /usr/local/bin/loopsmith
 ```
 
 Windows x86_64：
 
 ```powershell
-gh release download v0.2.0 -R ckken/loopsmith -p 'loopsmith-v0.2.0-x86_64-pc-windows-msvc.zip'
-Expand-Archive loopsmith-v0.2.0-x86_64-pc-windows-msvc.zip
-$env:Path += ";$PWD\loopsmith-v0.2.0-x86_64-pc-windows-msvc"
+gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-x86_64-pc-windows-msvc.zip'
+Expand-Archive loopsmith-v0.3.0-x86_64-pc-windows-msvc.zip
+$env:Path += ";$PWD\loopsmith-v0.3.0-x86_64-pc-windows-msvc"
 loopsmith.exe doctor
 ```
 
 ## 从源码安装
 
 ```bash
-cargo install --git https://github.com/ckken/loopsmith --tag v0.2.0
+cargo install --git https://github.com/ckken/loopsmith --tag v0.3.0
 loopsmith doctor
 ```
 
@@ -121,6 +121,7 @@ loopsmith doctor
 
 ```bash
 loopsmith doctor
+loopsmith profiles
 loopsmith run --config examples/plaintext-loop.json
 loopsmith inspect
 loopsmith diff

@@ -1,4 +1,5 @@
 use crate::{
+    hooks::{HooksConfig, run_required_hook},
     record::IterationRecord,
     verify::{VerifyResult, run_verify},
 };
@@ -32,6 +33,8 @@ pub struct RunManifest {
     pub final_record_path: Option<String>,
     pub final_artifact_path: Option<String>,
     pub summary_path: Option<String>,
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -220,6 +223,14 @@ pub fn apply_run(
     let mut verification = None;
     let mut applied = false;
     if !dry_run {
+        if let Some(command) = &manifest.hooks.pre_apply {
+            run_required_hook(
+                "pre_apply",
+                command,
+                source_root,
+                &runs_dir.join(&run_id).join("hooks/apply/pre_apply"),
+            )?;
+        }
         if let Some(parent) = source_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -231,6 +242,14 @@ pub fn apply_run(
             )
         })?;
         applied = true;
+        if let Some(command) = &manifest.hooks.post_apply {
+            run_required_hook(
+                "post_apply",
+                command,
+                source_root,
+                &runs_dir.join(&run_id).join("hooks/apply/post_apply"),
+            )?;
+        }
         if verify_after {
             verification = Some(run_verify(&manifest.verify, source_root)?);
         }

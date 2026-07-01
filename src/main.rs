@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use loopsmith::{
-    config::LoopConfig,
+    config::{BUILTIN_PROFILES, LoopConfig},
     run_state::{ApplyOutcome, RunInspection, apply_run, diff_run, inspect_run},
     runner::run_loop,
 };
@@ -18,6 +18,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Doctor,
+    Profiles,
     Run {
         #[arg(long)]
         config: PathBuf,
@@ -57,6 +58,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Doctor => doctor(),
+        Commands::Profiles => {
+            print_profiles();
+            Ok(())
+        }
         Commands::Run { config, runs_dir } => {
             let config = LoopConfig::from_path(&config)?;
             let summary = run_loop(&config, &std::env::current_dir()?, &runs_dir)?;
@@ -136,6 +141,12 @@ fn doctor() -> Result<()> {
 
     print!("{}", String::from_utf8_lossy(&output.stdout));
     Ok(())
+}
+
+fn print_profiles() {
+    for profile in BUILTIN_PROFILES {
+        println!("{} - {}", profile.name(), profile.description());
+    }
 }
 
 fn print_inspection(inspection: &RunInspection) {
