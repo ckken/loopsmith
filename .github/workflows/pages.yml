@@ -5,6 +5,7 @@ on:
     branches:
       - main
     paths:
+      - "assets/logo.png"
       - "site/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -34,10 +35,35 @@ jobs:
         with:
           enablement: true
 
+      - name: Prepare static site
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf .pages
+          mkdir -p .pages/assets
+          cp site/index.html .pages/index.html
+
+          if command -v magick >/dev/null 2>&1; then
+            magick assets/logo.png -trim +repage -resize 160x160 -strip .pages/assets/logo.png
+          elif command -v convert >/dev/null 2>&1; then
+            convert assets/logo.png -trim +repage -resize 160x160 -strip .pages/assets/logo.png
+          else
+            cp assets/logo.png .pages/assets/logo.png
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          page = Path(".pages/index.html")
+          text = page.read_text()
+          page.write_text(text.replace("../assets/logo.png", "assets/logo.png"))
+          PY
+
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: .pages
 
       - name: Deploy
         id: deployment
