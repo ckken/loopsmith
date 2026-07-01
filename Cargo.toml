@@ -3,7 +3,7 @@ name = "loopsmith"
 version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
-description = "Auditable repair loops forged with Codex CLI"
+description = "Auditable local AI workflow loops for Codex CLI"
 license = "MIT"
 
 [[bin]]

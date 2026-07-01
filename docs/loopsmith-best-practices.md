@@ -1,31 +1,45 @@
 # Loopsmith 最佳实践
 
-**Loopsmith：用可审计的 review、repair、verify 循环，自动编排 Codex 模型调用、候选 workspace、验证命令、迭代状态和审计记录，把 AI 生成的候选修复推进到可验证结果。**
+**Loopsmith：用可审计的 review / act / verify / record 循环，自动编排 Codex 模型调用、候选 workspace、验证命令、迭代状态和审计记录，把 AI 生成的候选结果推进到可验证、可审计、可回放的状态。**
 
-本文面向 `loopsmith` 的真实落地使用，目标是让 Codex 自动化修复编排流程可控、可审计、可复现，而不是把模型输出直接当作最终结果。
+本文面向 `loopsmith` 的真实落地使用，目标是让 Codex 本地 AI 工作流闭环可控、可审计、可复现，而不是把模型输出直接当作最终结果。
+
+## OpenAI Cookbook 对齐
+
+OpenAI 的 iterative repair loop 示例使用 documentation repair 讲解这个模式，但核心不是“修复”这个单一场景，而是 closed-loop agent workflow：agent 生成候选输出，验证输出，再把验证反馈用于下一轮。
+
+Loopsmith 采用同一条主线：
+
+- `review`：只读分析当前 artifact，返回结构化 findings。
+- `act`：在隔离 workspace 中生成下一版候选 artifact。当前实现和配置字段仍沿用 `repair` 这个阶段名。
+- `verify`：运行本地验证命令，输出是否通过和 remaining delta。
+- `record`：保存每一轮 handoff，让人工能复盘为什么继续、为什么停止、哪个候选结果可以进入验收。
+
+因此 Loopsmith 应该被理解为“本地 AI 工作流闭环编排 CLI”，而不是只面向 bug fix 的修复器。
 
 ## 核心原则
 
-`loopsmith` 应该被当作“候选修复生成器”，而不是自动合并器。它负责在隔离工作区里让 Codex 执行 review / repair，并通过机械验证命令判断候选结果是否可进入人工验收。
+`loopsmith` 应该被当作“候选结果治理器”，而不是自动合并器。它负责在隔离工作区里让 Codex 执行 review / action，并通过机械验证命令判断候选结果是否可进入人工验收。
 
 推荐坚持以下原则：
 
 - 先小范围运行，再扩大到多文件或跨模块任务。
-- 先让验证命令定义成功，再让模型尝试修复。
+- 先让验证命令定义成功，再让模型尝试生成候选结果。
 - 所有模型输出都写入审计记录，不以口头结论替代 `record.json`。
 - 默认只修改 `runs/<run-id>/` 下的候选工作区，不直接覆盖源文件。
-- 多 agent 只用于只读 review；repair 阶段保持单 writer。
+- 多 agent 只用于只读 review；writer/action 阶段保持单 writer。
 - hooks 使用 Loopsmith 项目配置，不依赖 Codex 全局 hook。
 - 自动测试只使用 fake executor，不在 CI 或单元测试中真实调用 `codex exec`。
 
 ## 适合的任务
 
-优先用于边界清晰、可以机械验证的任务：
+优先用于边界清晰、可以被可信反馈验证的任务：
 
-- README、配置示例、迁移说明、接口文档修复。
-- 单文件或少量文件的 lint / format / test 修复。
-- 有明确失败日志的测试修复。
-- 规则明确的代码改造，例如移除废弃 API、补齐字段、修复 schema。
+- README、配置示例、迁移说明、接口文档更新。
+- 单文件或少量文件的 lint / format / test 改动。
+- 有明确失败日志的测试补齐或测试通过改动。
+- 规则明确的代码改造，例如移除废弃 API、补齐字段、调整 schema。
+- prompt、策略文档、静态站点、示例配置等能用脚本或人工 rubric 验证的 artifact。
 
 暂时不建议用于以下场景：
 
@@ -63,7 +77,7 @@
 字段使用建议：
 
 - `artifact`：尽量指向单个高价值文件。第一版不要用目录作为目标。
-- `goal`：写清楚“要改什么”和“不要改什么”，避免模型扩大范围。
+- `goal`：写清楚“要产出什么”和“不要改什么”，避免模型扩大范围。
 - `verify`：必须是可重复执行的本地命令，且失败时能输出明确错误。
 - `max_iterations`：默认 3 足够。超过 3 轮仍失败，通常应该人工介入。
 - `profile`：优先从 `default`、`quick-fix`、`test-repair`、`docs-repair`、`multi-review` 中选择。
@@ -84,9 +98,9 @@ loopsmith profiles
 
 | Profile | 触发方式 | 适用场景 |
 | --- | --- | --- |
-| `default` | 单 reviewer | 普通小修 |
-| `quick-fix` | 快速单 reviewer | 低风险格式、文案、配置修复 |
-| `test-repair` | 测试导向 reviewer | 失败测试、缺失测试、验证输出修复 |
+| `default` | 单 reviewer | 普通小范围候选变更 |
+| `quick-fix` | 快速单 reviewer | 低风险格式、文案、配置更新 |
+| `test-repair` | 测试导向 reviewer | 失败测试、缺失测试、验证输出改进 |
 | `docs-repair` | 文档导向 reviewer | README、迁移说明、使用示例 |
 | `multi-review` | `correctness` / `tests` / `docs` 三个只读 reviewer | 高风险或需要更强审计的任务 |
 
@@ -106,10 +120,10 @@ hook 每次执行都会写入 `command.txt`、`stdout.txt`、`stderr.txt` 和 `r
 
 | 阶段 | 推荐模型 | 适用场景 |
 | --- | --- | --- |
-| 默认兜底 | `gpt-5.5` | 复杂任务、跨模块判断、高风险修复 |
+| 默认兜底 | `gpt-5.5` | 复杂任务、跨模块判断、高风险候选变更 |
 | Review | `gpt-5.4` | 日常代码审查、文档审查、测试失败定位 |
-| Repair | `gpt-5.4-mini` | 简单修复、格式调整、低风险文档更新 |
-| 快速试跑 | `gpt-5.3-codex-spark` | 低风险 repair、快速生成候选补丁 |
+| Writer / Action | `gpt-5.4-mini` | 简单候选变更、格式调整、低风险文档更新 |
+| 快速试跑 | `gpt-5.3-codex-spark` | 低风险 action、快速生成候选补丁 |
 
 实践建议：
 
@@ -127,7 +141,7 @@ hook 每次执行都会写入 `command.txt`、`stdout.txt`、`stderr.txt` 和 `r
 好的验证命令应该满足：
 
 - 本地可运行，不依赖临时人工输入。
-- 失败输出具体，能被下一轮 repair 消费。
+- 失败输出具体，能被下一轮 action 消费。
 - 运行时间可控，避免每轮都触发长时间集成测试。
 - 不修改源工作区，只在候选 workspace 内执行。
 
@@ -172,15 +186,15 @@ terraform apply
 - `review/prompt.txt`：review 阶段输入。
 - `review/schema.json`：review 输出约束。
 - `review/answer.json`：结构化 review 结果。
-- `repair/prompt.txt`：repair 阶段输入。
-- `repair/answer.json`：结构化 repair 结果。
+- `repair/prompt.txt`：writer/action 阶段输入，目录名沿用当前实现。
+- `repair/answer.json`：结构化候选结果生成记录。
 - `stdout.txt` / `stderr.txt`：Codex CLI 原始输出。
 - `record.json`：本轮汇总，包括 `iteration`、`validation`、`remaining_delta`。
 
 重点看 `record.json`：
 
 - `validation.passed = true` 只代表机械验证通过，不代表代码一定可合并。
-- `remaining_delta` 是下一轮 repair 的关键输入。
+- `remaining_delta` 是下一轮 action 的关键输入。
 - 如果连续多轮 `remaining_delta` 没有明显变化，应停止自动迭代，改为人工判断。
 
 ## 安全边界
@@ -199,7 +213,7 @@ terraform apply
 
 ## Subagent 策略
 
-当前阶段不建议让多个 subagent 同时修改文件。Loopsmith 已支持“多只读 review agent + 单 writer repair”的触发方式：
+当前阶段不建议让多个 subagent 同时修改文件。Loopsmith 已支持“多只读 review agent + 单 writer/action”的触发方式：
 
 ```json
 {
@@ -222,7 +236,7 @@ terraform apply
 约束：
 
 - review 阶段可以多个只读 agent，例如 correctness、tests、docs。
-- repair 阶段保持单 writer，避免多个 agent 写同一份候选 workspace。
+- writer/action 阶段保持单 writer，避免多个 agent 写同一份候选 workspace。
 - 每个 agent 都必须写入独立审计记录，包括模型、prompt、answer、耗时和失败原因。
 
 审计路径：
@@ -262,13 +276,13 @@ runs/<run-id>/iteration_1/repair/
 
 - 收窄 `artifact`。
 - 在 `goal` 中写明禁止改动范围。
-- 降低 `repair_model` 能力或提高 review 约束。
+- 降低 writer/action 模型能力或提高 review 约束。
 
 运行时间过长：
 
 - 降低 `max_iterations`。
 - 使用更窄的验证命令。
-- repair 阶段使用 `gpt-5.4-mini` 或 `gpt-5.3-codex-spark`。
+- writer/action 阶段使用 `gpt-5.4-mini` 或 `gpt-5.3-codex-spark`。
 
 ## 推荐落地路线
 
@@ -276,13 +290,13 @@ runs/<run-id>/iteration_1/repair/
 
 - Rust 单二进制 CLI。
 - 配置读取和校验。
-- review / repair / verify / record 闭环。
+- review / act / verify / record 闭环。
 - 候选 workspace 隔离。
 - run manifest / index / summary。
 - `inspect` / `diff` / `apply` 最小验收链路。
 - workflow profile。
 - Loopsmith lifecycle hooks。
-- 多只读 review agent + 单 writer repair。
+- 多只读 review agent + 单 writer/action。
 - fake executor 测试覆盖。
 
 下一步建议：

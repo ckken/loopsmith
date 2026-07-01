@@ -1,6 +1,6 @@
 # Loopsmith 全链路验收
 
-本文定义 Loopsmith 最小 vibecoding 工作流的验收标准。自动测试不真实调用 `codex exec`，避免模型耗时、权限和网络状态影响 CI；真实模型 loop 保留为人工验收项。
+本文定义 Loopsmith 最小本地 AI 工作流闭环的验收标准。自动测试不真实调用 `codex exec`，避免模型耗时、权限和网络状态影响 CI；真实模型 loop 保留为人工验收项。
 
 ## 本地质量门禁
 
@@ -23,7 +23,7 @@ bash scripts/package-release.sh
 验收链路必须覆盖：
 
 1. `run` 能生成 `runs/<run-id>/manifest.json`、`summary.md`、`iteration_N/record.json` 和 `runs/index.json`。
-2. `profile = "multi-review"` 能触发多个只读 review agent，并把 findings 合并给单 writer repair。
+2. `profile = "multi-review"` 能触发多个只读 review agent，并把 findings 合并给单 writer/action 阶段。
 3. `hooks` 能在 `pre_run`、`post_iteration`、`pre_apply`、`post_apply`、`on_failure` 写入审计文件。
 4. `inspect` 能读取最新 run 或指定 run，并展示状态、轮次、最终 record 和候选 artifact。
 5. `diff` 能对比源文件和候选 workspace。

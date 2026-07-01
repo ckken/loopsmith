@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 用 Rust 构建一个本地 CLI，负责运行可审计的 Codex 迭代修复闭环。
+**Goal:** 用 Rust 构建一个本地 CLI，负责运行可审计的 Codex 本地 AI 工作流闭环。
 
 **Architecture:** Rust CLI 只负责外层确定性编排：读取配置、准备候选工作区、调用 `codex exec`、执行机械验证、写入审计记录和判断停止条件。Codex 只作为 review/repair 引擎，通过 `--output-schema` 返回结构化 JSON；源文件默认不被直接修改，修复先落在 `runs/<run-id>/iteration_N/workspace/` 中。
 
@@ -829,7 +829,7 @@ use std::{
 
 #[derive(Debug, Parser)]
 #[command(name = "loopsmith")]
-#[command(about = "Run auditable iterative repair loops with Codex CLI")]
+#[command(about = "Run auditable local AI workflow loops with Codex CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

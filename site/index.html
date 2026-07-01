@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Loopsmith is a local CLI for auditable Codex review, repair, verify loops."
+      content="Loopsmith is a local CLI for auditable Codex AI workflow loops."
     />
-    <title>Loopsmith - AI 修复编排工具</title>
+    <title>Loopsmith - 本地 AI 工作流闭环编排 CLI</title>
     <link rel="icon" href="../assets/logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -18,7 +18,7 @@
     <meta property="og:title" content="Loopsmith" />
     <meta
       property="og:description"
-      content="用可审计的 review、repair、verify 循环，把 AI 生成的候选修复推进到可验证结果。"
+      content="面向 Codex 的本地 AI 工作流闭环编排 CLI，把候选结果推进到可验证、可审计、可回放的状态。"
     />
     <meta property="og:image" content="../assets/logo.png" />
     <style>
@@ -864,10 +864,10 @@
           <div>
             <img class="hero-mark" src="../assets/logo.png" alt="" />
             <h1>Loopsmith</h1>
-            <h2>面向 Codex 的自动化修复编排工具</h2>
+            <h2>面向 Codex 的本地 AI 工作流闭环<br />编排 CLI</h2>
             <p class="hero-copy">
-              用可审计的 review、repair、verify 循环，
-              把 AI 生成的候选修复推进到可验证结果。
+              用可审计的 review / act / verify / record 循环，
+              把 AI 生成的候选结果推进到可验证、可回放的状态。
             </p>
             <div class="hero-actions">
               <a class="button orange" href="https://github.com/ckken/loopsmith/releases/tag/v0.3.1">
@@ -896,19 +896,19 @@
                   <div class="flow-title">
                     <span>REVIEW</span>
                     <span>→</span>
-                    <span>REPAIR</span>
+                    <span>ACT</span>
                     <span>→</span>
                     <span>VERIFY</span>
                   </div>
                   <div class="flow-cards">
                     <div class="flow-card">
                       <strong>review</strong>
-                      <span>分析与诊断<br />生成修复计划</span>
+                      <span>只读分析<br />生成 findings</span>
                     </div>
                     <div class="arrow">→</div>
                     <div class="flow-card">
-                      <strong>repair</strong>
-                      <span>应用修复<br />提交变更</span>
+                      <strong>act</strong>
+                      <span>生成候选<br />写入 workspace</span>
                     </div>
                     <div class="arrow">→</div>
                     <div class="flow-card">
@@ -925,15 +925,15 @@
                 </div>
                 <div class="term-log">
                   <div><span class="check">✓</span> round 1 review <span class="passed">passed (12s)</span></div>
-                  <div><span class="check">✓</span> round 2 repair <span class="passed">passed (18s)</span></div>
+                  <div><span class="check">✓</span> round 2 action <span class="passed">passed (18s)</span></div>
                   <div><span class="check">✓</span> round 3 verify <span class="passed">passed (9s)</span></div>
-                  <div class="verify-line">✅ Verification passed. Loop complete.</div>
+                  <div class="verify-line">✓ Verification passed. Candidate ready.</div>
                 </div>
               </div>
               <div class="tree">runs/20250701-120102/
 ├─ round-1-review/
 │  └─ record.json
-├─ round-2-repair/
+├─ round-2-action/
 │  └─ record.json
 ├─ round-3-verify/
 │  └─ record.json
@@ -954,10 +954,11 @@
                   <p>在关键生命周期点注入自定义命令，保障质量与合规。</p>
                 </div>
               </div>
-              <pre class="snippet">[hooks]
-before_review = "cargo fmt --all"
-after_repair  = "cargo clippy --all"
-after_verify  = "cargo test --locked"</pre>
+              <pre class="snippet">"hooks": {
+  "pre_run": "git diff --check",
+  "post_iteration": "cargo test",
+  "post_apply": "cargo test --locked"
+}</pre>
             </article>
 
             <article class="feature">
@@ -967,13 +968,12 @@ after_verify  = "cargo test --locked"</pre>
                 </svg>
                 <div>
                   <h3>多角色 Agents</h3>
-                  <p>使用不同 Codex 模型与子智能体，按角色分工高效协作。</p>
+                  <p>多个只读 reviewer 分工分析，再交给单 writer 生成候选结果。</p>
                 </div>
               </div>
-              <pre class="snippet">[agents]
-review.model = "gpt-5.4"
-repair.model = "gpt-5.4-mini"
-verify.model = "gpt-5.3-codex-spark"</pre>
+              <pre class="snippet">"profile": "multi-review",
+"review_model": "gpt-5.4",
+"repair_model": "gpt-5.4-mini"</pre>
             </article>
 
             <article class="feature">
@@ -983,12 +983,12 @@ verify.model = "gpt-5.3-codex-spark"</pre>
                 </svg>
                 <div>
                   <h3>可审计的执行记录</h3>
-                  <p>完整记录每一轮输入输出、变更与验证结果，便于追溯与复盘。</p>
+                  <p>完整记录每一轮输入输出、候选变更、验证反馈与剩余 delta。</p>
                 </div>
               </div>
               <pre class="snippet">runs/&lt;timestamp&gt;/
 ├─ round-1-review/record.json
-├─ round-2-repair/record.json
+├─ round-2-action/record.json
 ├─ round-3-verify/record.json
 └─ summary.json</pre>
             </article>
@@ -1000,13 +1000,12 @@ verify.model = "gpt-5.3-codex-spark"</pre>
                 </svg>
                 <div>
                   <h3>安全与可控</h3>
-                  <p>支持沙箱隔离、审批策略与只读模式，掌控风险边界。</p>
+                  <p>候选 workspace 隔离、显式 apply、hash guard，掌控写回边界。</p>
                 </div>
               </div>
-              <pre class="snippet">[safety]
-sandbox         = "workspace-write"
-approval_policy = "on-failure"
-readonly_paths  = ["src/**", "tests/**"]</pre>
+              <pre class="snippet">"sandbox": "workspace-write",
+"approval_policy": "never",
+"apply": "manual + verify"</pre>
             </article>
           </div>
         </section>
@@ -1042,7 +1041,7 @@ sudo install -m 0755 loopsmith-v0.3.1-aarch64-apple-darwin/loopsmith /usr/local/
 
       <footer class="footer">
         <div class="footer-inner">
-          <span>Loopsmith：把 AI 修复推进到可验证结果。</span>
+          <span>Loopsmith：把 AI 候选结果推进到可验证、可审计、可回放的状态。</span>
           <div class="footer-links">
             <a href="https://github.com/ckken/loopsmith">GitHub</a>
             <a href="https://github.com/ckken/loopsmith/releases/tag/v0.3.1">Release</a>

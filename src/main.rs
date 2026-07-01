@@ -9,7 +9,7 @@ use std::{path::PathBuf, process::Command};
 
 #[derive(Debug, Parser)]
 #[command(name = "loopsmith")]
-#[command(about = "Run auditable iterative repair loops with Codex CLI")]
+#[command(about = "Run auditable local AI workflow loops with Codex CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

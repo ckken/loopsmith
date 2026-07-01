@@ -93,7 +93,7 @@ jobs:
           cat > release-notes.md <<EOF
           ## Loopsmith ${tag}
 
-          Loopsmith：把 AI 修复锻造成可验证结果的本地 CLI。
+          Loopsmith：面向 Codex 的本地 AI 工作流闭环编排 CLI。
 
           ### Install with GitHub CLI
 
