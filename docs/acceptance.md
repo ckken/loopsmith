@@ -101,13 +101,13 @@ JSON
 ```bash
 gh run list -R ckken/loopsmith --workflow CI --limit 1
 gh run list -R ckken/loopsmith --workflow Release --limit 1
-gh release view v0.3.0 -R ckken/loopsmith
+gh release view v0.3.1 -R ckken/loopsmith
 ```
 
 二进制安装验证：
 
 ```bash
-gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz' -D /tmp/loopsmith-release
-tar -xzf /tmp/loopsmith-release/loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz -C /tmp/loopsmith-release
-/tmp/loopsmith-release/loopsmith-v0.3.0-aarch64-apple-darwin/loopsmith doctor
+gh release download v0.3.1 -R ckken/loopsmith -p 'loopsmith-v0.3.1-aarch64-apple-darwin.tar.gz' -D /tmp/loopsmith-release
+tar -xzf /tmp/loopsmith-release/loopsmith-v0.3.1-aarch64-apple-darwin.tar.gz -C /tmp/loopsmith-release
+/tmp/loopsmith-release/loopsmith-v0.3.1-aarch64-apple-darwin/loopsmith doctor
 ```

@@ -40,16 +40,16 @@
 
 ```bash
 gh auth login
-gh release download v0.3.0 -R ckken/loopsmith -p 'loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz'
-tar -xzf loopsmith-v0.3.0-aarch64-apple-darwin.tar.gz
-sudo install -m 0755 loopsmith-v0.3.0-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
+gh release download v0.3.1 -R ckken/loopsmith -p 'loopsmith-v0.3.1-aarch64-apple-darwin.tar.gz'
+tar -xzf loopsmith-v0.3.1-aarch64-apple-darwin.tar.gz
+sudo install -m 0755 loopsmith-v0.3.1-aarch64-apple-darwin/loopsmith /usr/local/bin/loopsmith
 loopsmith doctor
 ```
 
 从源码安装：
 
 ```bash
-cargo install --git https://github.com/ckken/loopsmith --tag v0.3.0
+cargo install --git https://github.com/ckken/loopsmith --tag v0.3.1
 loopsmith doctor
 ```
 

@@ -184,7 +184,7 @@ Create `Cargo.toml`:
 ```toml
 [package]
 name = "loopsmith"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Auditable iterative repair loops driven by Codex CLI"
